@@ -1,0 +1,130 @@
+rules_version = '2';
+
+// GlowBoard Firestore rules — closed system, Google sign-in only.
+// Paste into Firebase console → Firestore → Rules, or `firebase deploy --only firestore:rules`.
+//
+// Access list: access/{gmail} (document ID = the lowercase Google email) holds { role, teamId?, name?, addedBy }.
+//   admin  → everything. Can grant admin / judge / coach by gmail.
+//   judge  → enters official scores (+ signatures).
+//   coach  → belongs to one team; renames it, adds/removes members of THAT team, practice + stats.
+//   member → belongs to one team; practice + stats.
+// Anyone can read teams, events and official scores (public dashboard). Nobody can write without an access doc.
+// Bootstrap: create the first admin's access/{gmail} document by hand in the console (README → First admin).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function myDoc() {
+      return get(/databases/$(database)/documents/access/$(request.auth.token.email));
+    }
+    function hasAccess() {
+      return signedIn() && exists(/databases/$(database)/documents/access/$(request.auth.token.email));
+    }
+    function myRole() {
+      return myDoc().data.role;
+    }
+    function myTeam() {
+      return myDoc().data.get('teamId', '');
+    }
+    function isAdmin() {
+      return hasAccess() && myRole() == 'admin';
+    }
+    function isJudge() {
+      return hasAccess() && (myRole() == 'judge' || myRole() == 'admin');
+    }
+    function coachOf(teamId) {
+      return hasAccess() && myRole() == 'coach' && myTeam() == teamId;
+    }
+    function onTeam(teamId) {
+      return hasAccess() && (myRole() == 'coach' || myRole() == 'member') && myTeam() == teamId;
+    }
+
+    // Highest possible Robot Game score is well under 1000 (see js/scoring.js maxScores()).
+    function validTotal(v) {
+      return v is int && v >= 0 && v <= 1000;
+    }
+    function validName(v) {
+      return v is string && v.size() > 0 && v.size() <= 60;
+    }
+    function validTeam(d) {
+      return d.number is int && d.number > 0 && validName(d.name);
+    }
+
+    match /access/{email} {
+      allow get: if signedIn()
+        && (request.auth.token.email == email || isAdmin() || coachOf(resource.data.teamId));
+      allow list: if isAdmin() || (hasAccess() && myRole() == 'coach' && resource.data.teamId == myTeam());
+      allow create: if (isAdmin()
+          && email == email.lower()
+          && request.resource.data.role in ['admin', 'judge', 'coach', 'member']
+          && (request.resource.data.role in ['admin', 'judge'] || request.resource.data.teamId is string))
+        || (coachOf(request.resource.data.teamId)
+          && email == email.lower()
+          && request.resource.data.role == 'member'
+          && request.resource.data.keys().hasOnly(['role', 'teamId', 'name', 'addedBy', 'addedAt'])
+          && request.resource.data.addedBy == request.auth.token.email);
+      allow update: if isAdmin()
+        || (coachOf(resource.data.teamId)
+          && resource.data.role == 'member'
+          && request.resource.data.role == 'member'
+          && request.resource.data.teamId == resource.data.teamId);
+      allow delete: if (isAdmin() && request.auth.token.email != email)
+        || (coachOf(resource.data.teamId) && resource.data.role == 'member');
+    }
+
+    match /events/{eventId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /teams/{teamId} {
+      allow read: if true;
+      allow create: if isAdmin() && validTeam(request.resource.data)
+        && teamId == 't' + string(request.resource.data.number);
+      allow delete: if isAdmin();
+      allow update: if (isAdmin() && validTeam(request.resource.data))
+        || (coachOf(teamId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+          && validName(request.resource.data.name));
+    }
+
+    match /scores/{scoreId} {
+      allow read: if true;
+      allow create: if isJudge()
+        && request.resource.data.judgeUid == request.auth.uid
+        && request.resource.data.eventId is string
+        && request.resource.data.teamId is string
+        && request.resource.data.round in [1, 2, 3]
+        && scoreId == request.resource.data.eventId + '_' + request.resource.data.teamId + '_R' + string(request.resource.data.round)
+        && validTotal(request.resource.data.total)
+        && request.resource.data.gp in [2, 3, 4]
+        && request.resource.data.hasSignature == true
+        && exists(/databases/$(database)/documents/events/$(request.resource.data.eventId))
+        && exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId));
+      allow update, delete: if isAdmin();
+    }
+
+    // Signatures are drawn by (often young) team members: only judges and admins may read them.
+    match /signatures/{scoreId} {
+      allow read: if isJudge();
+      allow create: if isJudge()
+        && request.resource.data.signature is string
+        && request.resource.data.signature.size() > 0
+        && request.resource.data.signature.size() < 200000;
+      allow update, delete: if isAdmin();
+    }
+
+    // Practice runs belong to a team: its coaches and members (and admins) can read them.
+    match /practice/{runId} {
+      allow read: if isAdmin() || onTeam(resource.data.teamId);
+      allow create: if onTeam(request.resource.data.teamId)
+        && request.resource.data.uid == request.auth.uid
+        && validTotal(request.resource.data.total);
+      allow delete: if isAdmin() || coachOf(resource.data.teamId)
+        || (onTeam(resource.data.teamId) && resource.data.uid == request.auth.uid);
+      allow update: if false;
+    }
+  }
+}
