@@ -27,8 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: mkdir _site && cp -r index.html css js assets _site/
-      - run: node scripts/inject-config.mjs _site
-        env: { FIREBASE_CONFIG: '${{ secrets.FIREBASE_CONFIG }}' }
       - uses: actions/upload-pages-artifact@v3
         with: { path: _site }
       - id: deployment

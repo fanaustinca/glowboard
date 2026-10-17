@@ -227,3 +227,11 @@ button.opt { cursor: pointer; } button.opt:hover:not(:disabled) { background: va
 .top-in .brand { flex: none; }
 .user b { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (min-width: 720px) and (max-width: 940px) { .nav a { padding: 8px 10px; } .user .badge { display: none; } .bn small { display: none; } }
+.sched th, .sched td { white-space: nowrap; } .sched td.hit { background: var(--accent-soft); font-weight: 600; }
+.sched-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; margin: 12px 0; }
+.sched-form .row-actions { grid-column: 1 / -1; }
+.sched-meta { margin: 8px 0; } .chip { display: inline-block; background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 4px 10px; margin: 2px 2px; font-weight: 600; font-size: .9rem; }
+.mine { margin: 0 0 12px; line-height: 2; } .badge.warnb { background: #f59f00; color: #1d1d1d; }
+.evtitle { margin: 0 0 12px; }
+@media (max-width: 480px) { .nav a { padding: 8px 2px; font-size: .78rem; min-width: 0; } }
+@media (min-width: 720px) and (max-width: 940px) { .bn, .user b { display: none; } }

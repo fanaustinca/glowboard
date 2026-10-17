@@ -1,20 +1,23 @@
 import { createStore } from './store.js';
-import { dashboardView, loginView, judgeView, practiceView, statsView, teamView, adminView } from './views.js';
+import { dashboardView, loginView, judgeView, practiceView, statsView, teamView, adminView, scheduleView, eventView } from './views.js';
+import { hostedEvents } from './store.js';
 import { esc, toast } from './ui.js';
 import { SEASON } from './missions.js';
 
 const ROUTES = {
   '': { view: dashboardView, label: 'Standings', roles: null, nav: true },
-  judge: { view: judgeView, label: 'Judge', roles: ['judge', 'admin'], nav: true },
+  schedule: { view: scheduleView, label: 'Schedule', roles: null, nav: true },
+  judge: { view: judgeView, label: 'Judge', roles: ['judge', 'admin', 'host'], nav: true },
+  event: { view: eventView, label: 'Event', roles: ['host', 'admin'], nav: true },
   practice: { view: practiceView, label: 'Practice', roles: ['coach', 'member'], nav: true },
-  stats: { view: statsView, label: 'Team stats', roles: ['coach', 'member'], nav: true },
-  team: { view: teamView, label: 'My team', roles: ['coach', 'member'], nav: true },
+  stats: { view: statsView, label: 'Stats', roles: ['coach', 'member'], nav: true },
+  team: { view: teamView, label: 'Team', roles: ['coach', 'member'], nav: true },
   admin: { view: adminView, label: 'Admin', roles: ['admin'], nav: true },
   login: { view: loginView, label: 'Sign in', roles: null, nav: false },
 };
 
 const main = document.getElementById('main');
-let store, data = { teams: [], scores: [], events: [] }, current = null, ctx;
+let store, data = { teams: [], scores: [], events: [], eventHosts: [] }, current = null, ctx;
 
 async function boot() {
   try { store = await createStore(); } catch (e) {
@@ -22,14 +25,17 @@ async function boot() {
     return;
   }
   ctx = {
-    store, teams: () => data.teams, scores: () => data.scores, events: () => data.events,
+    store, teams: () => data.teams, scores: () => data.scores, events: () => data.events, eventHosts: () => data.eventHosts,
+    scoringEvents: () => (['judge', 'admin'].includes(store.user?.role) ? data.events : hostedEvents(store.user, data.events, data.eventHosts)),
     user: () => store.user, go: (h) => { location.hash = h; }, afterLogin: '#/',
   };
   store.subscribe('teams', (r) => { data.teams = r; refresh(); });
   store.subscribe('scores', (r) => { data.scores = r; refresh(); });
   store.subscribe('events', (r) => { data.events = r; refresh(); });
-  let lastRole;
+  let lastRole, unsubHosts = null;
   store.onAuth((u) => {
+    unsubHosts?.(); data.eventHosts = [];
+    unsubHosts = store.subscribe('eventHosts', (r) => { data.eventHosts = r; refresh(); });
     renderChrome();
     if (lastRole !== undefined && lastRole !== (u?.role ?? null)) route(); // role changed → re-gate the current page
     lastRole = u?.role ?? null;

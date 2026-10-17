@@ -27,7 +27,7 @@ test('every helper function has a body that returns a value (Firestore requires 
   for (const [, name, body] of fns) assert.match(body, /^\s*return [^;]+;\s*$/, `function ${name} must be exactly "return <expr>;"`);
   assert.equal([...code.matchAll(/function \w+\(/g)].length, fns.length, 'no function was skipped by the parser');
 });
-test('every collection the app touches has a match block', () => { for (const c of ['access', 'events', 'teams', 'scores', 'signatures', 'practice']) block(c); });
+test('every collection the app touches has a match block', () => { for (const c of ['access', 'events', 'eventHosts', 'teams', 'scores', 'signatures', 'practice']) block(c); });
 test('no write/create/update/delete is ever open to everyone', () => {
   assert.ok(!/allow [a-z, ]*(write|create|update|delete)[a-z, ]*:\s*if true/.test(code));
 });
@@ -38,15 +38,30 @@ test('sign-in alone grants nothing: every privilege goes through the access/{gma
 });
 test('public can read only teams, events and official scores', () => {
   for (const c of ['teams', 'events', 'scores']) assert.deepEqual(allow(block(c), 'read'), ['true'], c);
-  for (const c of ['access', 'signatures', 'practice']) assert.ok(!allow(block(c), 'read').includes('true'), c + ' not public');
+  for (const c of ['access', 'eventHosts', 'signatures', 'practice']) assert.ok(!allow(block(c), 'read').includes('true'), c + ' not public');
 });
-test('signatures are readable by judges/admins only', () => assert.deepEqual(allow(block('signatures'), 'read'), ['isJudge()']));
-test('events are admin-write only', () => assert.deepEqual(allow(block('events'), 'write'), ['isAdmin()']));
+test('signatures are readable by judges/hosts/admins only', () => assert.deepEqual(allow(block('signatures'), 'read'), ['isJudge() || isHostAny()']));
+test('events: admins create/delete; a host may change ONLY teamIds + schedule of events they host', () => {
+  const b = block('events');
+  assert.deepEqual(allow(b, 'create'), ['isAdmin()']); assert.deepEqual(allow(b, 'delete'), ['isAdmin()']);
+  const upd = allow(b, 'update')[0];
+  assert.match(upd, /isHostOf\(eventId\)/); assert.match(upd, /affectedKeys\(\)\.hasOnly\(\['teamIds', 'schedule'\]\)/);
+});
+test('eventHosts: admin-write only; readable only by admins and the hosts listed (emails stay private)', () => {
+  const b = block('eventHosts');
+  assert.match(allow(b, 'write')[0], /^isAdmin\(\)/);
+  assert.match(allow(b, 'get')[0], /request\.auth\.token\.email in resource\.data\.emails/);
+  assert.match(code, /function isHostOf\(eventId\)[\s\S]*?eventHosts\/\$\(eventId\)/);
+});
+test('hosts create teams like admins but only edit/delete the ones they created', () => {
+  const b = block('teams');
+  assert.match(allow(b, 'create')[0], /isAdmin\(\) \|\| isHostAny\(\)/); assert.match(allow(b, 'create')[0], /createdBy == request\.auth\.token\.email/);
+  assert.match(allow(b, 'delete')[0], /createdBy/); assert.match(allow(b, 'update')[0], /isHostAny\(\) && resource\.data\.get\('createdBy', ''\) == request\.auth\.token\.email/);
+});
 test('teams: admin creates (number + name required, id pinned to number); coach may change ONLY the name', () => {
   const b = block('teams');
-  assert.match(allow(b, 'create')[0], /^isAdmin\(\)/); assert.match(allow(b, 'create')[0], /validTeam\(request\.resource\.data\)/);
+  assert.match(allow(b, 'create')[0], /^\(isAdmin\(\) \|\| isHostAny\(\)\)/); assert.match(allow(b, 'create')[0], /validTeam\(request\.resource\.data\)/);
   assert.match(allow(b, 'create')[0], /teamId == 't' \+ string\(request\.resource\.data\.number\)/);
-  assert.deepEqual(allow(b, 'delete'), ['isAdmin()']);
   const upd = allow(b, 'update')[0];
   assert.match(upd, /coachOf\(teamId\)/); assert.match(upd, /affectedKeys\(\)\.hasOnly\(\['name'\]\)/);
   assert.match(code, /function validTeam\(d\)[\s\S]*?d\.number is int && d\.number > 0 && validName\(d\.name\)/, 'both number and name required');
@@ -55,7 +70,7 @@ test('teams: admin creates (number + name required, id pinned to number); coach 
 test('access list: admins manage everyone; coaches can only add/remove plain members of their own team', () => {
   const b = block('access');
   const create = allow(b, 'create')[0];
-  assert.match(create, /isAdmin\(\)/); assert.match(create, /role in \['admin', 'judge', 'coach', 'member'\]/);
+  assert.match(create, /isAdmin\(\)/); assert.match(create, /role in \['admin', 'host', 'judge', 'coach', 'member'\]/);
   assert.match(create, /coachOf\(request\.resource\.data\.teamId\)/); assert.match(create, /request\.resource\.data\.role == 'member'/);
   assert.match(create, /hasOnly\(\['role', 'teamId', 'name', 'addedBy', 'addedAt'\]\)/, 'coach cannot smuggle extra fields');
   assert.match(create, /email == email\.lower\(\)/, 'document IDs are lowercase emails');
@@ -72,7 +87,7 @@ test('access list: you can read your own entry; coaches can list only their own 
 });
 test('scores: judges create once per event+team+match; only admins update/delete', () => {
   const b = block('scores');
-  assert.match(allow(b, 'create')[0], /^isJudge\(\)/);
+  assert.match(allow(b, 'create')[0], /^\(isJudge\(\) \|\| isHostOf\(request\.resource\.data\.eventId\)\)/, 'judges, or hosts of THAT event');
   assert.deepEqual(allow(b, 'update'), ['isAdmin()']); assert.deepEqual(allow(b, 'delete'), ['isAdmin()']);
   assert.match(b, /scoreId == request\.resource\.data\.eventId \+ '_' \+ request\.resource\.data\.teamId \+ '_R' \+ string\(request\.resource\.data\.round\)/, 'doc id pins event+team+round → one score per match');
   assert.match(b, /judgeUid == request\.auth\.uid/, 'judge cannot forge another judge');

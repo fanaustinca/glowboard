@@ -116,6 +116,7 @@ for (const vp of VIEWPORTS) {
     assert.ok(r.l >= 0 && r.r <= r.w, 'dialog within viewport'); await shot(page, `${vp.name}-dialog`);
     await page.click('dialog[open] [data-close]'); await page.waitForFunction(() => !document.querySelector('dialog'));
   });
+  await check('schedule page (public)', async () => { await goHash(page, 'schedule'); await assertLayout(page, 'schedule'); await shot(page, `${vp.name}-schedule`); });
   await check('login page', async () => { await goHash(page, 'login'); await assertLayout(page, 'login'); await shot(page, `${vp.name}-login`); });
   await login(page, 'judge@demo.test');
   await check('judge scoring page', async () => { await goHash(page, 'judge'); await assertLayout(page, 'judge'); await shot(page, `${vp.name}-judge`); });
@@ -130,6 +131,9 @@ for (const vp of VIEWPORTS) {
   await check('practice page', async () => { await goHash(page, 'practice'); await assertLayout(page, 'practice'); await shot(page, `${vp.name}-practice`); });
   await check('stats page', async () => { await goHash(page, 'stats'); await assertLayout(page, 'stats'); await shot(page, `${vp.name}-stats`); });
   await check('my team page (coach)', async () => { await goHash(page, 'team'); await assertLayout(page, 'team'); await shot(page, `${vp.name}-team`); });
+  await page.evaluate(() => document.getElementById('signout').click());
+  await login(page, 'host@demo.test');
+  await check('event page (host)', async () => { await goHash(page, 'event'); await assertLayout(page, 'event'); await shot(page, `${vp.name}-event`); });
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'admin@demo.test');
   await check('admin console', async () => { await goHash(page, 'admin'); await assertLayout(page, 'admin'); await shot(page, `${vp.name}-admin`); });
@@ -159,7 +163,7 @@ await login(page, 'judge@demo.test');
 
 await check('judge nav shows Judge but not Host/Practice/My stats', async () => {
   const links = await page.$$eval('#nav a', (a) => a.map((x) => x.textContent));
-  assert.deepEqual(links, ['Standings', 'Judge']);
+  assert.deepEqual(links, ['Standings', 'Schedule', 'Judge']);
 });
 
 const expect = defaultState();
@@ -282,7 +286,7 @@ await check('judges cannot delete scores or touch teams/accounts', async () => {
 await page.evaluate(() => document.getElementById('signout').click());
 await login(page, 'coach@demo.test');
 await check('coach nav shows Practice, Team stats and My team only', async () => {
-  assert.deepEqual(await page.$$eval('#nav a', (a) => a.map((x) => x.textContent)), ['Standings', 'Practice', 'Team stats', 'My team']);
+  assert.deepEqual(await page.$$eval('#nav a', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']);
 });
 await check('team can save a practice run (no signature needed) and sees it in stats', async () => {
   await goHash(page, 'practice');
@@ -392,6 +396,61 @@ await check('admin: events, teams, people & access, CSV, edit score, delete scor
 await check('host can re-score a match that was deleted', async () => {
   await goHash(page, 'judge'); await page.select('#sc-team', 't9120');
   assert.equal(await page.$eval('#sc-round', (e) => e.value), '1');
+});
+await check('admin assigns an event host; host manages teams and builds + saves a schedule; it shows on the public page', async () => {
+  await goHash(page, 'admin');
+  await page.$eval('[data-evhosts="ev1"]', (e) => e.click()); await page.waitForSelector('dialog[open] #h-email');
+  await page.type('dialog #h-email', 'Pat.Host@Gmail.com'); await page.click('dialog #h-add button');
+  await page.waitForFunction(() => document.querySelector('dialog[open]').textContent.includes('pat.host@gmail.com'));
+  await page.type('dialog #h-email', 'coach@demo.test'); await page.click('dialog #h-add button');
+  await page.waitForFunction(() => /already a coach/.test(document.querySelector('#h-err').textContent));
+  await page.$eval('dialog [data-close]', (e) => e.click());
+  assert.match(await text(page, '#a-events'), /1 host/);
+  await page.evaluate(() => document.getElementById('signout').click());
+  await login(page, 'host@demo.test');
+  assert.deepEqual(await page.$$eval('#nav a', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Event']);
+  await goHash(page, 'event');
+  assert.match(await text(page, '#ev'), /Season Opener/);
+  assert.equal(await page.$('#e-sel'), null, 'host of one event sees only that event');
+  await page.click('#e-team button'); assert.match(await text(page, '#e-terr'), /number is required/);
+  await page.type('#e-tn', '8800'); await page.click('#e-team button'); assert.match(await text(page, '#e-terr'), /name is required/);
+  await page.type('#e-tname', 'Host <i>Added</i>'); await page.click('#e-team button');
+  await page.waitForFunction(() => document.querySelector('#e-checks').textContent.includes('#8800'));
+  assert.equal(await page.$('#e-checks i'), null, 'team names are HTML-escaped');
+  await page.$eval('#e-all', (e) => e.click()); await page.$eval('#e-saveteams', (e) => e.click());
+  await page.waitForFunction(() => document.querySelector('.toast.ok'));
+  await page.$eval('#c-rounds', (e) => { e.value = '4'; }); await page.$eval('#c-tables', (e) => { e.value = '3'; }); await page.$eval('#c-start', (e) => { e.value = '10:00'; });
+  await page.click('#e-gen'); await page.waitForSelector('#e-save');
+  assert.match(await text(page, '#e-sched'), /Preview \(not saved\)/);
+  assert.equal((await page.$$('#e-sched table')).length, 4, 'one table per round');
+  const firstTime = await page.$eval('#e-sched tbody th', (e) => e.textContent); assert.equal(firstTime, '10:00');
+  await shot(page, 'flow-event-preview');
+  const csv = await page.evaluate(async () => {
+    let captured = ''; const orig = URL.createObjectURL; URL.createObjectURL = (b) => { b.text().then((t) => { captured = t; }); return orig(b); };
+    HTMLAnchorElement.prototype.click = function () {}; document.getElementById('e-csv').click();
+    await new Promise((r) => setTimeout(r, 200)); return captured;
+  });
+  assert.ok(csv.startsWith('Event,Round,Time,Table,Team number,Team name')); const nTeams = await page.$$eval('#e-checks [data-tid]', (c) => c.length); assert.equal(csv.trim().split('\n').length, 1 + nTeams * 4, `${nTeams} teams × 4 rounds`);
+  assert.match(await page.evaluate(() => document.getElementById('e-sheets').textContent), /not set up/);
+  await page.$eval('#e-sheets', (e) => e.click()); await page.waitForFunction(() => document.querySelector('.toast.err'));
+  await page.$eval('#e-save', (e) => e.click()); await page.waitForFunction(() => /Saved schedule/.test(document.querySelector('#e-sched').textContent));
+  await goHash(page, 'schedule');
+  await page.$eval('#s-ev', (e) => { e.value = 'ev2'; e.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.waitForFunction(() => document.querySelector('#s-body').textContent.includes('Round 4'));
+  await page.type('#s-q', '8800'); await page.waitForSelector('.mine');
+  assert.equal((await page.$$('.mine .chip')).length, 4, 'the team’s 4 matches are listed');
+  assert.ok((await page.$$('.sched td.hit')).length >= 4);
+  await assertLayout(page, 'schedule with data'); await shot(page, 'flow-schedule');
+  await goHash(page, 'admin'); assert.match(await text(page, 'main'), /Admins only/);
+  const r = await page.evaluate(async () => {
+    const { createStore } = await import('./js/store.js'); const s = await createStore(); const out = [];
+    for (const f of [() => s.patch('events', 'ev1', { schedule: null }), () => s.patch('events', 'ev2', { name: 'Hijack' }), () => s.put('events', 'evN', { name: 'x' }), () => s.put('eventHosts', 'ev2', { emails: ['x@y.com'] }),
+      () => s.put('access', 'z@gmail.com', { role: 'admin' }), () => s.remove('teams', 't4201'), () => s.patch('teams', 't4201', { name: 'steal' })]) {
+      try { await f(); out.push('allowed'); } catch (e) { out.push(e.code); }
+    }
+    return out;
+  });
+  assert.deepEqual(r, Array(7).fill('permission-denied'), 'host powers are limited to their own event + teams they created');
 });
 await check('theme toggle switches and persists', async () => {
   await page.$eval('#theme', (e) => e.click());

@@ -4,7 +4,9 @@ rules_version = '2';
 // Paste into Firebase console → Firestore → Rules, or `firebase deploy --only firestore:rules`.
 //
 // Access list: access/{gmail} (document ID = the lowercase Google email) holds { role, teamId?, name?, addedBy }.
-//   admin  → everything. Can grant admin / judge / coach by gmail.
+//   admin  → everything. Creates events, picks each event's hosts, grants admin / host / judge / coach by gmail.
+//   host   → runs the events an admin assigned them (eventHosts/{eventId}.emails): adds teams, picks which teams
+//            compete, generates the match schedule, and can enter official scores for those events.
 //   judge  → enters official scores (+ signatures).
 //   coach  → belongs to one team; renames it, adds/removes members of THAT team, practice + stats.
 //   member → belongs to one team; practice + stats.
@@ -34,6 +36,13 @@ service cloud.firestore {
     function isJudge() {
       return hasAccess() && (myRole() == 'judge' || myRole() == 'admin');
     }
+    function isHostAny() {
+      return hasAccess() && myRole() == 'host';
+    }
+    function isHostOf(eventId) {
+      return isHostAny()
+        && request.auth.token.email in get(/databases/$(database)/documents/eventHosts/$(eventId)).data.get('emails', []);
+    }
     function coachOf(teamId) {
       return hasAccess() && myRole() == 'coach' && myTeam() == teamId;
     }
@@ -58,8 +67,8 @@ service cloud.firestore {
       allow list: if isAdmin() || (hasAccess() && myRole() == 'coach' && resource.data.teamId == myTeam());
       allow create: if (isAdmin()
           && email == email.lower()
-          && request.resource.data.role in ['admin', 'judge', 'coach', 'member']
-          && (request.resource.data.role in ['admin', 'judge'] || request.resource.data.teamId is string))
+          && request.resource.data.role in ['admin', 'host', 'judge', 'coach', 'member']
+          && (request.resource.data.role in ['admin', 'host', 'judge'] || request.resource.data.teamId is string))
         || (coachOf(request.resource.data.teamId)
           && email == email.lower()
           && request.resource.data.role == 'member'
@@ -74,17 +83,31 @@ service cloud.firestore {
         || (coachOf(resource.data.teamId) && resource.data.role == 'member');
     }
 
+    // Who hosts which event. Private (hosts' emails are not public): admins, and the hosts listed in the doc.
+    match /eventHosts/{eventId} {
+      allow get, list: if isAdmin() || (isHostAny() && request.auth.token.email in resource.data.emails);
+      allow write: if isAdmin() && request.resource.data.emails is list;
+    }
+
     match /events/{eventId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow create, delete: if isAdmin();
+      // A host may only change the team list and the schedule of an event they host.
+      allow update: if isAdmin()
+        || (isHostOf(eventId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamIds', 'schedule']));
     }
 
     match /teams/{teamId} {
       allow read: if true;
-      allow create: if isAdmin() && validTeam(request.resource.data)
+      // Hosts add teams the same way admins do (and own the ones they created).
+      allow create: if (isAdmin() || isHostAny()) && validTeam(request.resource.data)
+        && request.resource.data.createdBy == request.auth.token.email
         && teamId == 't' + string(request.resource.data.number);
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (isHostAny() && resource.data.get('createdBy', '') == request.auth.token.email);
       allow update: if (isAdmin() && validTeam(request.resource.data))
+        || (isHostAny() && resource.data.get('createdBy', '') == request.auth.token.email
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+          && validName(request.resource.data.name))
         || (coachOf(teamId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
           && validName(request.resource.data.name));
@@ -92,7 +115,7 @@ service cloud.firestore {
 
     match /scores/{scoreId} {
       allow read: if true;
-      allow create: if isJudge()
+      allow create: if (isJudge() || isHostOf(request.resource.data.eventId))
         && request.resource.data.judgeUid == request.auth.uid
         && request.resource.data.eventId is string
         && request.resource.data.teamId is string
@@ -106,10 +129,10 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
-    // Signatures are drawn by (often young) team members: only judges and admins may read them.
+    // Signatures are drawn by (often young) team members: only judges, hosts and admins may read them.
     match /signatures/{scoreId} {
-      allow read: if isJudge();
-      allow create: if isJudge()
+      allow read: if isJudge() || isHostAny();
+      allow create: if (isJudge() || isHostAny())
         && request.resource.data.signature is string
         && request.resource.data.signature.size() > 0
         && request.resource.data.signature.size() < 200000;

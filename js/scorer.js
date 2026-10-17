@@ -264,7 +264,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     const u = user();
     const team = teams().find((t) => t.id === teamId);
     if (official) {
-      if (!u || !['judge', 'admin'].includes(u.role)) return showError('Only judges and admins can submit official scores.');
+      if (!u || !['judge', 'admin', 'host'].includes(u.role)) return showError('Only judges, event hosts and admins can submit official scores.');
       if (!curEvent()) return showError('Choose an event first.');
       if (!team) return showError('Choose a team first.');
       if (scoredRounds(teamId).has(round) && u.role !== 'admin') return showError('That match already has an official score.');

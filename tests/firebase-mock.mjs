@@ -50,12 +50,12 @@ ok('login page offers Google sign-in only (no username/password)');
 // stranger: authenticates with Google but is not on the access list → rejected and signed back out
 await google('uid-ghost', 'Ghost@Gmail.com'); await page.click('#lg-google'); await w(600);
 assert.match(await page.$eval('#lg-err', (e) => e.textContent), /ghost@gmail\.com isn’t on the access list/);
-assert.deepEqual(await nav(), ['Standings']); assert.equal(await page.$eval('#signout', (e) => getComputedStyle(e).display), 'none'); ok('a Google account that is not on the access list is rejected (and gets no privileges)');
+assert.deepEqual(await nav(), ['Standings', 'Schedule']); assert.equal(await page.$eval('#signout', (e) => getComputedStyle(e).display), 'none'); ok('a Google account that is not on the access list is rejected (and gets no privileges)');
 assert.ok((await fbState()).log.some((l) => l[0] === 'googlePopup' && l[1] === true)); ok('uses the Google provider popup');
 
 // judge
 await signIn('uid-judge', 'judge@gmail.com');
-assert.deepEqual(await nav(), ['Standings', 'Judge']); ok('judge on the access list gets Judge only');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Judge']); ok('judge on the access list gets Judge only');
 await hash('judge');
 assert.equal(await page.$eval('#sc-event', (e) => e.value), 'ev1', 'live event preselected');
 await page.select('#sc-team', 't1');
@@ -84,7 +84,7 @@ await signOut();
 
 // coach
 await signIn('uid-coach', 'coach@gmail.com');
-assert.deepEqual(await nav(), ['Standings', 'Practice', 'Team stats', 'My team']); ok('coach gets Practice, Team stats and My team');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']); ok('coach gets Practice, Team stats and My team');
 await hash('team');
 await page.$eval('#t-name', (e) => { e.value = ''; }); await page.type('#t-name', 'Alpha Prime'); await page.click('#t-rename button'); await w(300);
 assert.equal((await fbState()).docs.teams.t1.name, 'Alpha Prime'); assert.equal((await fbState()).docs.teams.t1.number, 1); ok('coach renames their team (only the name changes)');
@@ -103,20 +103,40 @@ await signOut();
 // member
 await page.evaluate(() => { globalThis.__fb.google = { uid: 'uid-parent', email: 'parent@gmail.com' }; });
 await signIn('uid-parent', 'parent@gmail.com');
-assert.deepEqual(await nav(), ['Standings', 'Practice', 'Team stats', 'My team']); ok('a member added by their coach can sign in');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']); ok('a member added by their coach can sign in');
 await hash('team'); assert.equal(await page.$('#t-add'), null); assert.equal(await page.$('#t-rename'), null); ok('members cannot rename the team or add people (coach-only UI)');
+await signOut();
+
+// event host (assigned per event by an admin)
+await signIn('uid-host', 'host@gmail.com');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Judge', 'Event']); ok('event host gets Judge + Event (no Admin)');
+await hash('admin'); assert.match(await page.$eval('main', (e) => e.textContent), /Admins only/); ok('host is blocked from the admin console');
+await hash('event');
+assert.match(await page.$eval('#ev', (e) => e.textContent), /Regional/);
+await page.type('#e-tn', '77'); await page.type('#e-tname', 'Hosted Team'); await page.click('#e-team button'); await w(400);
+assert.deepEqual((await fbState()).docs.teams.t77, { number: 77, name: 'Hosted Team', createdBy: 'host@gmail.com' }); ok('host adds a team (number + name, creator recorded)');
+await page.click('#e-team button'); await w(100); assert.match(await page.$eval('#e-terr', (e) => e.textContent), /number is required/); ok('host form also requires a number and a name');
+await page.$eval('#c-rounds', (e) => { e.value = '3'; }); await page.$eval('#c-tables', (e) => { e.value = '2'; });
+await page.click('#e-gen'); await w(300);
+assert.match(await page.$eval('#e-sched', (e) => e.textContent), /Preview \(not saved\)/);
+await page.click('#e-save'); await w(400);
+st = await fbState(); const sch = st.docs.events.ev1.schedule;
+assert.equal(sch.rows.length, 3 * 3, '3 teams (Alpha, Beta, Hosted Team) × 3 rounds'); ok('host generates and saves a schedule on their event');
+assert.equal(sch.config.tables, 2); assert.equal(sch.generatedBy, 'host@gmail.com');
+await hash('schedule'); assert.match(await page.$eval('#s-body', (e) => e.textContent), /Round 3/); assert.match(await page.$eval('#s-body', (e) => e.textContent), /Hosted Team/); ok('the saved schedule is public on the Schedule page');
+await hash('judge'); assert.equal(await page.$eval('#sc-event', (e) => e.value), 'ev1'); ok('host can open the scoring form for their event');
 await signOut();
 
 // admin
 await signIn('uid-boss', 'boss@gmail.com');
-assert.deepEqual(await nav(), ['Standings', 'Judge', 'Admin']); ok('admin sees Judge and Admin');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Judge', 'Event', 'Admin']); ok('admin sees Judge, Event and Admin');
 await hash('admin');
 await page.type('#a-evn', 'State Finals'); await page.click('#a-ev button'); await w(300);
 assert.ok(Object.values((await fbState()).docs.events).some((e) => e.name === 'State Finals')); ok('admin adds an event');
 await page.click('#a-team button'); await w(100); assert.match(await page.$eval('#a-terr', (e) => e.textContent), /number is required/);
 await page.type('#a-tn', '42'); await page.click('#a-team button'); await w(100); assert.match(await page.$eval('#a-terr', (e) => e.textContent), /name is required/);
 await page.type('#a-tname', 'Fortytwo'); await page.click('#a-team button'); await w(300);
-assert.deepEqual((await fbState()).docs.teams.t42, { number: 42, name: 'Fortytwo' }); ok('adding a team requires BOTH number and name');
+assert.deepEqual((await fbState()).docs.teams.t42, { number: 42, name: 'Fortytwo', createdBy: 'boss@gmail.com' }); ok('adding a team requires BOTH number and name');
 await page.type('#a-ue', 'NewJudge@Gmail.com'); await page.select('#a-ur', 'judge'); await page.click('#a-user button'); await w(300);
 await page.type('#a-ue', 'second.coach@gmail.com'); await page.select('#a-ur', 'coach'); await page.select('#a-ut', 't1'); await page.click('#a-user button'); await w(300);
 await page.type('#a-ue', 'Friend@Gmail.com'); await page.select('#a-ur', 'admin'); await page.type('#a-un', 'Friend'); await page.click('#a-user button'); await w(300);
@@ -124,9 +144,18 @@ st = await fbState();
 assert.equal(st.docs.access['newjudge@gmail.com'].role, 'judge'); assert.equal(st.docs.access['second.coach@gmail.com'].teamId, 't1'); assert.equal(st.docs.access['friend@gmail.com'].role, 'admin');
 ok('admin grants judge / coach (several per team) / admin by gmail');
 assert.equal(await page.$('[data-rmp="boss@gmail.com"]'), null); ok('admin cannot remove their own access in the UI');
+await page.click('[data-evhosts="ev1"]'); await page.waitForSelector('dialog[open] #h-email');
+await page.type('dialog #h-email', 'New.Host@Gmail.com'); await page.click('dialog #h-add button'); await w(500);
+st = await fbState();
+assert.deepEqual(st.docs.eventHosts.ev1.emails, ['host@gmail.com', 'new.host@gmail.com']); assert.equal(st.docs.access['new.host@gmail.com'].role, 'host'); ok('admin assigns a second host to an event (host access doc created)');
+await page.type('dialog #h-email', 'coach@gmail.com'); await page.click('dialog #h-add button'); await w(300);
+assert.match(await page.$eval('dialog #h-err', (e) => e.textContent), /already a coach/); ok('a person with another role can’t be made host');
+await page.click('dialog [data-hrm="new.host@gmail.com"]'); await w(500);
+st = await fbState(); assert.deepEqual(st.docs.eventHosts.ev1.emails, ['host@gmail.com']); assert.equal(st.docs.access['new.host@gmail.com'], undefined); ok('removing the last event assignment removes the host’s access');
+await page.click('dialog [data-close]'); await w(200);
 await signOut();
 await signIn('uid-friend', 'friend@gmail.com');
-assert.deepEqual(await nav(), ['Standings', 'Judge', 'Admin']); ok('a newly granted admin can sign in with admin powers');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Judge', 'Event', 'Admin']); ok('a newly granted admin can sign in with admin powers');
 await signOut();
 
 await browser.close(); server.close();

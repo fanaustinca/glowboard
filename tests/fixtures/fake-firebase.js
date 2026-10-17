@@ -8,6 +8,9 @@ const fb = (globalThis.__fb ||= {
 // access list (document ID = lowercase gmail). ghost@gmail.com is deliberately NOT listed.
 fb.docs.access['boss@gmail.com'] ||= { role: 'admin', name: 'Boss' };
 fb.docs.access['judge@gmail.com'] ||= { role: 'judge' };
+fb.docs.access['host@gmail.com'] ||= { role: 'host' };
+fb.docs.eventHosts ||= {};
+fb.docs.eventHosts.ev1 ||= { emails: ['host@gmail.com'] };
 fb.docs.access['coach@gmail.com'] ||= { role: 'coach', teamId: 't1', name: 'Coach C' };
 fb.docs.events.ev1 ||= { name: 'Regional', live: true, createdAt: 1 };
 fb.docs.teams.t1 ||= { number: 1, name: 'Alpha' };
@@ -40,7 +43,8 @@ export const collection = (_db, name) => ({ kind: 'col', name });
 export const doc = (a, b, c) => (a.kind === 'col' ? { kind: 'doc', col: a.name, id: Math.random().toString(36).slice(2, 12) } : { kind: 'doc', col: b, id: c });
 export const where = (f, op, v) => ({ f, op, v });
 export const query = (col, ...w) => ({ ...col, w });
-const rows = (q) => Object.entries(fb.docs[q.name] || {}).filter(([, d]) => (q.w || []).every((c) => d[c.f] === c.v)).map(([id, d]) => ({ id, data: () => d }));
+const match = (d, c) => (c.op === 'array-contains' ? (d[c.f] || []).includes(c.v) : d[c.f] === c.v);
+const rows = (q) => Object.entries(fb.docs[q.name] || {}).filter(([, d]) => (q.w || []).every((c) => match(d, c))).map(([id, d]) => ({ id, data: () => d }));
 export const onSnapshot = (q, cb) => { const run = () => cb({ docs: rows(q) }); fb.listeners.add(run); setTimeout(run, 0); return () => fb.listeners.delete(run); };
 export const getDoc = async (ref) => { const d = fb.docs[ref.col]?.[ref.id]; return { exists: () => !!d, id: ref.id, data: () => d }; };
 export const setDoc = async (ref, data) => { fb.log.push(['setDoc', ref.col, ref.id]); (fb.docs[ref.col] ||= {})[ref.id] = JSON.parse(JSON.stringify(data)); notify(); };

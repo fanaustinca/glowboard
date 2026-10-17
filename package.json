@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/scoring.test.mjs && node tests/rules.test.mjs && node tests/firebase-mock.mjs && node tests/responsive.mjs",
+    "test": "node tests/scoring.test.mjs && node tests/schedule.test.mjs && node tests/rules.test.mjs && node tests/firebase-mock.mjs && node tests/responsive.mjs",
     "test:scoring": "node tests/scoring.test.mjs",
     "test:ui": "node tests/responsive.mjs",
     "serve": "node scripts/serve.mjs",
     "test:rules": "node tests/rules.test.mjs",
-    "test:firebase": "node tests/firebase-mock.mjs"
+    "test:firebase": "node tests/firebase-mock.mjs",
+    "test:schedule": "node tests/schedule.test.mjs"
   },
   "devDependencies": {
     "puppeteer-core": "^24.0.0"
