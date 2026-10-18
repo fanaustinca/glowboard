@@ -128,7 +128,7 @@ test('team password: memberships per team (uid_teamId); must match the team’s 
   assert.match(c, /isAnon\(\) \|\| hasAccess\(\)/); assert.match(c, /hasOnly\(\['uid', 'teamId', 'password', 'name', 'createdAt'\]\)/); assert.match(c, /memberId == request\.auth\.uid \+ '_' \+ request\.resource\.data\.teamId/);
   assert.match(c, /request\.resource\.data\.password == get\(.*teamSecrets/, 'joining needs the real password'); assert.match(c, /get\('enabled', true\) == true/, 'cannot join while switched off');
   const t = block('teamSecrets');
-  assert.match(allow(t, 'read')[0], /isAdmin\(\) \|\| coachOf\(teamId\) \|\| teamCreator\(teamId\)/); assert.ok(!allow(t, 'read').includes('true'));
+  assert.match(allow(t, 'read')[0], /^isAdmin\(\) \|\| coachOf\(teamId\)$/); assert.ok(!allow(t, 'read').join().includes('teamCreator'), 'hosts cannot read the team password'); assert.ok(!allow(t, 'read').includes('true'));
   assert.deepEqual(allow(t, 'delete'), ['isAdmin()']);
   assert.match(code, /function validSecret\(d\)[\s\S]*?size\(\) >= 6[\s\S]*?hasOnly\(\['password', 'updatedBy', 'updatedAt', 'enabled', 'isDefault'\]\)/);
 });

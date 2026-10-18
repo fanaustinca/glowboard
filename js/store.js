@@ -361,7 +361,7 @@ class DemoStore {
   }
   async get(col, id) {
     if (col === 'signatures') { const ev = id.split('_')[0]; this.need((x) => this.judgeFor(x, ev) || this.hostOf(x, ev)); }
-    if (col === 'teamSecrets') this.need((x) => this.canSecret(x, id));
+    if (col === 'teamSecrets') this.need((x) => this.isAdmin(x) || this.coachOf(x, id));
     if (col === 'eventJudges') this.need((x) => this.isAdmin(x) || this.hostOf(x, id) || (this.db.eventJudges[id]?.emails || []).includes(x.email));
     const r = this.db[col][id];
     return r ? { ...r } : null;

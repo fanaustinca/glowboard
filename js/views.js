@@ -146,25 +146,29 @@ const copyText = async (t) => { try { await navigator.clipboard.writeText(t); re
 async function openTeamPassword(ctx, teamId) {
   const team = ctx.teams().find((t) => t.id === teamId); const u = ctx.user();
   if (!team || !u) return;
+  // Only admins and the team's coaches may read the password; the host who created the team can only replace it.
+  const canSee = u.role === 'admin' || isCoachOn(u, teamId);
   let secret = null;
-  try { secret = await ctx.store.get('teamSecrets', teamId); } catch (x) { return toast(x.message, 'err'); }
+  if (canSee) { try { secret = await ctx.store.get('teamSecrets', teamId); } catch (x) { return toast(x.message, 'err'); } }
   const dlg = modal('<div id="pw-body"></div>', { title: `Team password · #${team.number} ${team.name}` });
   // A coach changing it marks it as "chosen by the coach" (stops the change-your-password reminder); admin/host resets don't.
   const write = async (patch, okMsg) => {
     const next = { password: secret?.password, enabled: secret ? secret.enabled !== false : true, ...patch };
+    if (!canSee) { next.enabled = true; }
     try {
       await ctx.store.put('teamSecrets', teamId, { password: next.password, enabled: next.enabled, isDefault: patch.isDefault ?? !isCoachOn(u, teamId), updatedBy: u.email, updatedAt: Date.now() });
-      secret = { ...next, isDefault: patch.isDefault ?? !isCoachOn(u, teamId) }; paint(); toast(okMsg, 'ok');
+      if (canSee) secret = { ...next, isDefault: patch.isDefault ?? !isCoachOn(u, teamId) };
+      paint(); toast(okMsg, 'ok');
     } catch (x) { toast(x.message, 'err'); }
   };
   const on = () => secret ? secret.enabled !== false : true;
   function paint() {
     dlg.querySelector('#pw-body').innerHTML = `
-      <p class="muted small">Team members can join with this password.</p>
-      ${secret ? `<div class="pwbox ${on() ? '' : 'off'}"><code id="pw-code" aria-label="Team password">${esc(secret.password)}</code><button class="btn small" id="pw-copy" type="button">Copy</button></div>
+      <p class="muted small">Team members can join with this password.${canSee ? '' : ' Only the coach and admins can see it.'}</p>
+      ${!canSee ? '' : secret ? `<div class="pwbox ${on() ? '' : 'off'}"><code id="pw-code" aria-label="Team password">${esc(secret.password)}</code><button class="btn small" id="pw-copy" type="button">Copy</button></div>
         <p class="pwstate" id="pw-state">Password sign-in is <b>${on() ? 'ON' : 'OFF'}</b>${on() ? '' : ' — nobody can join with the password, and people who did are removed'}.
           ${isCoachOn(u, teamId) || u.role === 'admin' ? `<button class="btn ghost small" id="pw-toggle" type="button">${on() ? 'Turn off' : 'Turn on'}</button>` : ''}</p>` : '<p class="empty">No team password yet.</p>'}
-      <div class="row-actions"><button class="btn primary" id="pw-new" type="button">${secret ? 'New random 6-digit code' : 'Create a 6-digit code'}</button></div>
+      <div class="row-actions"><button class="btn primary" id="pw-new" type="button">${canSee && !secret ? 'Create a 6-digit code' : 'New random 6-digit code'}</button></div>
       <form id="pw-form" class="inline" novalidate><label class="field grow"><span>Or choose your own <small>(6+ characters)</small></span><input id="pw-custom" autocomplete="off" maxlength="64"></label><button class="btn">Save</button></form>
       <div id="pw-err" class="error" role="alert" hidden></div>
       <p class="muted small">Changing the password signs out everyone who joined with the old one.</p>`;
@@ -172,7 +176,7 @@ async function openTeamPassword(ctx, teamId) {
   dlg.addEventListener('click', async (e) => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.id === 'pw-copy') toast((await copyText(secret.password)) ? 'Copied' : 'Select the code and copy it', 'ok');
-    if (b.id === 'pw-new' && (!secret || confirm('Generate a new code? Everyone using the old one will be signed out.'))) write({ password: genCode(), enabled: true }, 'Team password updated — anyone using the old one is removed from the team');
+    if (b.id === 'pw-new' && (!canSee || !secret || confirm('Generate a new code? Everyone using the old one will be signed out.'))) write({ password: genCode(), enabled: true }, 'Team password updated — anyone using the old one is removed from the team');
     if (b.id === 'pw-toggle') write({ enabled: !on() }, on() ? 'Password sign-in turned off' : 'Password sign-in turned on');
   });
   dlg.addEventListener('submit', (e) => {
@@ -220,13 +224,13 @@ export async function promptDefaultPasswords(ctx) {
     });
   } finally { pwPrompting = false; }
 }
-function showTeamCreated(res) {
+function showTeamCreated(res, showPw = true) {
   const coachLine = { added: `Designated coach: <b>${esc(res.coachEmail)}</b> — they sign in with Google, and can coach several teams.`, failed: `<b>${esc(res.coachEmail)}</b> couldn’t be added as coach — add them again from the Teams or Admin page.`, none: 'No coach yet — add one from the Admin page.' }[res.coach];
   const dlg = modal(`<p><b>#${esc(res.number)} ${esc(res.name)}</b> is set up.</p><p>${coachLine}</p>
-    <p class="muted small">Team password — share it so members can join:</p>
+    ${showPw ? `<p class="muted small">Team password — share it so members can join:</p>
     <div class="pwbox"><code>${esc(res.password)}</code><button class="btn small" id="pw-copy" type="button">Copy</button></div>
-    <p class="muted small">The coach will be reminded to replace this code with their own.</p>`, { title: 'Team created' });
-  dlg.querySelector('#pw-copy').addEventListener('click', async () => toast((await copyText(res.password)) ? 'Copied' : 'Select the code and copy it', 'ok'));
+    <p class="muted small">The coach will be reminded to replace this code with their own.</p>` : '<p class="muted small">The coach signs in, opens the team and finds the team password there.</p>'}`, { title: 'Team created' });
+  dlg.querySelector('#pw-copy')?.addEventListener('click', async () => toast((await copyText(res.password)) ? 'Copied' : 'Select the code and copy it', 'ok'));
 }
 
 // ───────────────────────────── Judge ─────────────────────────────
@@ -630,7 +634,7 @@ export function adminView(root, ctx) {
     if (!name) return bad('A team name is required.');
     if (!EMAIL_RE.test(coachEmail)) return bad('Enter the designated coach’s Google email address.');
     if (ctx.teams().some((t) => t.number === number)) return bad(`Team #${number} already exists.`);
-    run(async () => { const res = await createTeam(ctx.store, u, { number, name, coachEmail }); e.target.reset(); $('#a-tn').focus(); showTeamCreated(res); });
+    run(async () => { const res = await createTeam(ctx.store, u, { number, name, coachEmail }); e.target.reset(); $('#a-tn').focus(); showTeamCreated(res, true); });
   });
   $('#a-bulkgo').addEventListener('click', () => run(async () => {
     const lines = $('#a-bulk').value.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -798,7 +802,7 @@ export function eventView(root, ctx) {
         <p class="muted small">Delete a score so the match can be scored again.</p>
         <ul class="admin-list" id="e-scores">${scoresHTML(ev)}</ul></section>`;
   }
-  const checksHTML = (teams) => teams.map((t) => `<div class="checkrow"><label class="check"><input type="checkbox" data-tid="${esc(t.id)}" ${picks.has(t.id) ? 'checked' : ''}> <span><b>#${esc(t.number)}</b> ${esc(t.name)}</span></label>${u.role === 'admin' || t.createdBy === u.email ? `<button class="btn ghost small" type="button" data-teampw="${esc(t.id)}" aria-label="Team password for ${esc(t.name)}">🔑</button>` : ''}</div>`).join('') || '<p class="empty">No teams yet — add one above.</p>';
+  const checksHTML = (teams) => teams.map((t) => `<div class="checkrow"><label class="check"><input type="checkbox" data-tid="${esc(t.id)}" ${picks.has(t.id) ? 'checked' : ''}> <span><b>#${esc(t.number)}</b> ${esc(t.name)}</span></label></div>`).join('') || '<p class="empty">No teams yet — add one above.</p>';
   // Refresh just the lists (not the forms), so typing / Enter-to-submit never loses focus or half-typed input.
   function refreshLists() {
     const ev = cur(); if (!ev) return;
@@ -862,7 +866,7 @@ export function eventView(root, ctx) {
         const res = await createTeam(ctx.store, u, { number, name, coachEmail });
         picks.add(res.id);
         if (ev.teamIds?.length) await ctx.store.patch('events', ev.id, { teamIds: [...new Set([...ev.teamIds, res.id])] });
-        e.target.reset(); host.querySelector('#e-tn').focus(); showTeamCreated(res);
+        e.target.reset(); host.querySelector('#e-tn').focus(); showTeamCreated(res, false);
       });
     }
     if (e.target.id === 'e-ref') {
@@ -903,7 +907,6 @@ export function eventView(root, ctx) {
     if (b.id === 'e-all') { picks = new Set(ctx.teams().map((t) => t.id)); host.querySelectorAll('[data-tid]').forEach((c) => { c.checked = true; }); }
     if (b.id === 'e-none') { picks = new Set(); host.querySelectorAll('[data-tid]').forEach((c) => { c.checked = false; }); }
     if (b.id === 'e-saveteams') run(async () => { await ctx.store.patch('events', ev.id, { teamIds: [...picks] }); draft = null; draw(); toast(picks.size ? `${picks.size} teams saved` : 'All teams included', 'ok'); });
-    if (b.dataset.teampw) openTeamPassword(ctx, b.dataset.teampw);
     if (b.id === 'e-bulkgo') run(async () => {
       const lines = host.querySelector('#e-bulk').value.split('\n').map((l) => l.trim()).filter(Boolean);
       const made = [];

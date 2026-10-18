@@ -435,9 +435,9 @@ await check('admin assigns an event host; host manages teams and builds + saves 
   await page.type('#e-tn', '8800'); await tap(page, '#e-team button'); assert.match(await text(page, '#e-terr'), /name is required/);
   await page.type('#e-tname', 'Host <i>Added</i>'); await tap(page, '#e-team button'); assert.match(await text(page, '#e-terr'), /coach’s Google email/);
   await page.type('#e-tcoach', 'host.coach@gmail.com'); await tap(page, '#e-team button');
-  await page.waitForSelector('dialog[open] .pwbox code'); await tap(page, 'dialog [data-close]');
+  await page.waitForSelector('dialog[open]'); assert.equal(await page.$('dialog[open] .pwbox'), null, 'a host is not shown the team password'); await tap(page, 'dialog [data-close]');
   await page.waitForFunction(() => document.querySelector('#e-checks').textContent.includes('#8800'));
-  assert.ok(await page.$('#e-checks [data-teampw="t8800"]'), 'the host can re-open the password of a team they created');
+  assert.equal(await page.$('#e-checks [data-teampw]'), null, 'no password icon in the Event tab');
   assert.equal(await page.$('#e-checks i'), null, 'team names are HTML-escaped');
   await page.$eval('#e-all', (e) => e.click()); await page.$eval('#e-saveteams', (e) => e.click());
   await page.waitForFunction(() => document.querySelector('.toast.ok'));

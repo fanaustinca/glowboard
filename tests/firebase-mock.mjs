@@ -173,7 +173,7 @@ assert.deepEqual(st.docs.teams.t77, { number: 77, name: 'Hosted Team', createdBy
 assert.match(st.docs.teamSecrets.t77.password, /^[1-9]\d{5}$/); assert.equal(st.docs.teamSecrets.t77.updatedBy, 'host@gmail.com');
 assert.deepEqual({ ...st.docs.access['designated@gmail.com'], addedAt: 0 }, { role: 'coach', teamId: 't77', name: '', addedBy: 'host@gmail.com', addedAt: 0 });
 assert.equal(st.docs.roster['t77__designated@gmail.com'].role, 'coach'); assert.equal(st.docs.teamSecrets.t77.enabled, true, 'team password is ON by default'); assert.equal(st.docs.teamSecrets.t77.isDefault, true);
-assert.match(await page.$eval('dialog[open]', (d) => d.textContent), new RegExp(st.docs.teamSecrets.t77.password)); await tap(page, 'dialog [data-close]');
+assert.doesNotMatch(await page.$eval("dialog[open]", (d) => d.textContent), new RegExp(st.docs.teamSecrets.t77.password)); ok("host is not shown the team password"); await tap(page, "dialog [data-close]");
 ok('host adds a team: random 6-digit team password created, designated coach added, password shown once');
 await page.$eval('#c-rounds', (e) => { e.value = '3'; }); await page.$eval('#c-tables', (e) => { e.value = '2'; });
 await tap(page, '#e-gen'); await w(300);

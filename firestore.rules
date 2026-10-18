@@ -192,9 +192,9 @@ service cloud.firestore {
       allow write: if (isAdmin() || isHostOf(eventId)) && request.resource.data.emails is list;
     }
 
-    // The shared team password. Only the team's coaches, admins and the host who created the team can see/change it.
+    // The shared team password. Only the team's coaches and admins can SEE it; the host who created the team can only replace it.
     match /teamSecrets/{teamId} {
-      allow read: if isAdmin() || coachOf(teamId) || teamCreator(teamId);
+      allow read: if isAdmin() || coachOf(teamId);
       allow create, update: if (isAdmin() || coachOf(teamId) || teamCreator(teamId)) && validSecret(request.resource.data);
       allow delete: if isAdmin();
     }
