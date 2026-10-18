@@ -3,11 +3,12 @@
 import { standings, maxScores } from './scoring.js';
 import { MISSIONS, MATCHES_PER_TEAM, SEASON } from './missions.js';
 import { mountScorer } from './scorer.js';
-import { ROLE_LABEL, eventTeams, normEmail, EMAIL_RE, DEMO_ACCOUNTS, hostedEvents, isCoachOn, coachTeamIds, rosterId } from './store.js';
+import { ROLE_LABEL, canScore, eventTeams, normEmail, EMAIL_RE, DEMO_ACCOUNTS, hostedEvents, isCoachOn, coachTeamIds, rosterId } from './store.js';
 import { generateSchedule, groupSchedule, scheduleTable, clampConfig, SCHEDULE_DEFAULTS, LIMITS } from './schedule.js';
 import { computeStats, filterRuns } from './stats.js';
 import { createTeam, addTeamPerson, genCode } from './teams.js';
-import { downloadCSV, copyForSheets, sendToSheets, sheetsConfigured } from './sheets.js';
+import { downloadCSV, copyForSheets } from './sheets.js';
+import { analyticsView } from './analytics.js';
 import { esc, toast, timeAgo, modal, csvCell, download } from './ui.js';
 
 const max = () => maxScores();
@@ -32,7 +33,7 @@ export function dashboardView(root, ctx) {
     </section>
     <div class="toolbar"><label class="field evsel"><span class="sr">Event</span><select id="d-ev" aria-label="Event"></select></label><label class="search"><span class="sr">Find a team</span><input id="d-q" type="search" placeholder="Find a team or number…" autocomplete="off"></label></div>
     <div class="cols">
-      <section class="card"><h2>Team standings</h2><p class="muted small">Ranked by each team’s best official match. Ties are broken by 2nd, then 3rd best.</p>
+      <section class="card"><h2>Team standings</h2><p class="muted small">Ranked by best official match.</p>
         <ol class="standings" id="d-rows"></ol><p class="empty" id="d-empty" hidden>No teams yet.</p></section>
       <aside class="card"><h2>Latest scores</h2><ul class="feed" id="d-feed"></ul><p class="empty" id="d-feedempty" hidden>Scores will appear here as judges submit them.</p></aside>
     </div>`;
@@ -108,7 +109,7 @@ export function loginView(root, ctx) {
       ${demo ? '' : '<button id="lg-google" class="btn primary big" type="button">Sign in with Google</button>'}
       <div id="lg-err" class="error" role="alert" hidden></div>
       <div class="or"><span>team members</span></div>
-      <form id="tl" novalidate><p class="muted small">No Google account? Use your team’s shared password for practice runs and team stats. You can add more teams later from the Teams tab.</p>
+      <form id="tl" novalidate><p class="muted small">No Google account? Use your team number and password.</p>
         <div class="tl-grid"><label class="field"><span>Team number</span><input id="tl-num" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" required></label>
         <label class="field"><span>Team password</span><input id="tl-pw" autocomplete="off" autocapitalize="none" spellcheck="false" required></label></div>
         <label class="field"><span>Your name <small>(optional — shown on your practice runs)</small></span><input id="tl-name" maxlength="40" autocomplete="name"></label>
@@ -125,7 +126,7 @@ export function loginView(root, ctx) {
     const num = $('#tl-num').value.trim(), pw = $('#tl-pw').value.trim();
     if (!num || !pw) return fail({ message: 'Enter your team number and the team password.' });
     const btn = e.submitter; btn.disabled = true;
-    try { await ctx.store.signInTeam(num, pw, $('#tl-name').value); ctx.go('#/practice'); } catch (x) { fail(x); } finally { btn.disabled = false; }
+    try { await ctx.store.signInTeam(num, pw, $('#tl-name').value); ctx.go('#/team'); } catch (x) { fail(x); } finally { btn.disabled = false; }
   });
   $('#lg-google')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget; $('#lg-err').hidden = true; btn.disabled = true;
@@ -159,7 +160,7 @@ async function openTeamPassword(ctx, teamId) {
   const on = () => secret ? secret.enabled !== false : true;
   function paint() {
     dlg.querySelector('#pw-body').innerHTML = `
-      <p class="muted small">Anyone with this password can join the team as a <b>team member</b> (practice runs + team stats only). Coaches, judges, hosts and admins always use Google sign-in.</p>
+      <p class="muted small">Team members can join with this password.</p>
       ${secret ? `<div class="pwbox ${on() ? '' : 'off'}"><code id="pw-code" aria-label="Team password">${esc(secret.password)}</code><button class="btn small" id="pw-copy" type="button">Copy</button></div>
         <p class="pwstate" id="pw-state">Password sign-in is <b>${on() ? 'ON' : 'OFF'}</b>${on() ? '' : ' — nobody can join with the password, and people who did are removed'}.
           ${isCoachOn(u, teamId) || u.role === 'admin' ? `<button class="btn ghost small" id="pw-toggle" type="button">${on() ? 'Turn off' : 'Turn on'}</button>` : ''}</p>` : '<p class="empty">No team password yet.</p>'}
@@ -203,7 +204,7 @@ export async function promptDefaultPasswords(ctx) {
     const dlg = modal(`<p><b>Please change your team password.</b> ${found.length === 1 ? 'It is' : 'They are'} still the random code made when the team was set up, so it may have been shared widely.</p>
       <ul class="admin-list">${found.map((f) => `<li><span><b>#${esc(f.team?.number ?? f.id.slice(1))} ${esc(f.team?.name ?? '')}</b><small class="block">current code <code>${esc(f.password)}</code></small></span>
         <span class="acts"><button class="btn primary small" data-pwchange="${esc(f.id)}">Change it</button><button class="btn ghost small" data-pwkeep="${esc(f.id)}">Keep this one</button><button class="btn ghost small" data-pwoff="${esc(f.id)}">Turn off</button></span></li>`).join('')}</ul>
-      <p class="muted small">You can do this any time from the Teams tab. Closing this reminds you next time you sign in.</p>`, { title: 'Change your team password' });
+      <p class="muted small">You can change it any time on the Teams tab.</p>`, { title: 'Change your team password' });
     dlg.dataset.pwprompt = '1';
     dlg.addEventListener('click', async (e) => {
       const b = e.target.closest('button'); if (!b) return;
@@ -222,7 +223,7 @@ export async function promptDefaultPasswords(ctx) {
 function showTeamCreated(res) {
   const coachLine = { added: `Designated coach: <b>${esc(res.coachEmail)}</b> — they sign in with Google, and can coach several teams.`, failed: `<b>${esc(res.coachEmail)}</b> couldn’t be added as coach — add them again from the Teams or Admin page.`, none: 'No coach yet — add one from the Admin page.' }[res.coach];
   const dlg = modal(`<p><b>#${esc(res.number)} ${esc(res.name)}</b> is set up.</p><p>${coachLine}</p>
-    <p class="muted small">Team password (sign-in with it is ON — the coach can change it or turn it off). Share it with the team so they can join as members:</p>
+    <p class="muted small">Team password — share it so members can join:</p>
     <div class="pwbox"><code>${esc(res.password)}</code><button class="btn small" id="pw-copy" type="button">Copy</button></div>
     <p class="muted small">The coach will be reminded to replace this code with their own.</p>`, { title: 'Team created' });
   dlg.querySelector('#pw-copy').addEventListener('click', async () => toast((await copyText(res.password)) ? 'Copied' : 'Select the code and copy it', 'ok'));
@@ -232,42 +233,17 @@ function showTeamCreated(res) {
 export function judgeView(root, ctx) {
   const u = ctx.user();
   if (!u) return gate(root, 'Referees, event hosts and admins sign in to enter official scores.', ctx);
-  if (!(['judge', 'admin'].includes(u.role) || u.host || ctx.scoringEvents().length)) { root.innerHTML = '<section class="card narrow"><h1>Referees only</h1><p class="muted">Your account can’t enter official scores. Teams can use the Practice page.</p></section>'; return {}; }
+  if (!canScore(u, ctx.scoringEvents())) { root.innerHTML = '<section class="card narrow"><h1>Referees only</h1><p class="muted">This account isn’t a judge, referee or host for any event. Ask an admin to add it as a judge (Admin → People) or a host to add it as a referee.</p></section>'; return {}; }
   root.innerHTML = '<h1 class="page-title">Official scoring</h1><div id="sc"></div>';
   const sc = mountScorer(root.querySelector('#sc'), { mode: 'official', store: ctx.store, teams: ctx.teams, scores: ctx.scores, events: ctx.scoringEvents, user: ctx.user });
   return { update: () => sc.refresh(), destroy: () => sc.destroy() };
 }
 
-// People on several teams pick which one the Practice and Stats pages are about.
-function teamSwitch(u, ctx) {
-  if ((u.teams || []).length < 2) return '';
-  const name = (id) => { const t = ctx.teams().find((x) => x.id === id); return t ? `#${t.number} ${t.name}` : id; };
-  return `<label class="field teamswitch"><span>Team</span><select id="ts" aria-label="Switch team">${u.teams.map((t) => `<option value="${esc(t.teamId)}" ${t.teamId === u.teamId ? 'selected' : ''}>${esc(name(t.teamId))} · ${t.role === 'coach' ? 'coach' : 'member'}</option>`).join('')}</select></label>`;
-}
-function bindTeamSwitch(root, ctx) {
-  root.querySelector('#ts')?.addEventListener('change', (e) => ctx.store.setActiveTeam(e.target.value));
-}
-const noTeam = (root, msg) => { root.innerHTML = `<section class="card narrow"><h1>Join a team first</h1><p class="muted">${esc(msg)} Add your team with its number and password on the <a href="#/team">Teams</a> tab.</p></section>`; return {}; };
-
-// ───────────────────────────── Practice ─────────────────────────────
-export function practiceView(root, ctx) {
-  const u = ctx.user();
-  if (!u) return gate(root, 'Coaches and team members sign in to score practice runs.', ctx);
-  if (!u.teamId) return noTeam(root, 'Practice runs belong to a team’s coaches and members.');
-  const team = () => ctx.teams().find((t) => t.id === u.teamId);
-  root.innerHTML = `<h1 class="page-title">Practice${team() ? ` · #${esc(team().number)} ${esc(team().name)}` : ''}</h1>${teamSwitch(u, ctx)}<div id="sc"></div>`;
-  bindTeamSwitch(root, ctx);
-  const sc = mountScorer(root.querySelector('#sc'), { mode: 'practice', store: ctx.store, teams: ctx.teams, scores: ctx.scores, user: ctx.user, lockedTeamId: u.teamId });
-  return { update: () => sc.refresh(), destroy: () => sc.destroy() };
-}
-
 // ───────────────────────────── Team stats ─────────────────────────────
-export function statsView(root, ctx) {
+export function statsView(root, ctx, { onEdit = () => {} } = {}) {
   const u = ctx.user();
-  if (!u) return gate(root, 'Coaches and team members sign in to see their team’s practice stats.', ctx);
-  if (!u.teamId) return noTeam(root, 'Stats are shown for a team’s coaches and members.');
-  root.innerHTML = `<h1 class="page-title">Team stats</h1>${teamSwitch(u, ctx)}<div id="st"></div>`;
-  bindTeamSwitch(root, ctx);
+  if (!u?.teamId) return { destroy() {} };
+  root.innerHTML = '<div id="st"></div>';
   let runs = [], range = 'all';
   const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
   const r0 = (n) => Math.round(n);
@@ -290,7 +266,7 @@ export function statsView(root, ctx) {
     const st = computeStats(set);
     const o = st.overall;
     const official = ctx.scores().filter((x) => x.teamId === u.teamId).sort((a, b) => a.round - b.round);
-    if (!runs.length) { el.innerHTML = '<section class="card"><p class="empty">No practice runs saved yet — head to <a href="#/practice">Practice</a> and score a run. Everyone on your team shares these stats.</p></section>'; return; }
+    if (!runs.length) { el.innerHTML = '<section class="card"><p class="empty">No practice runs saved yet — tap <b>➕ Practice run</b> above to score one. Everyone on your team shares these stats.</p></section>'; return; }
     const trend = o.trend == null ? '' : `<small class="${o.trend >= 0 ? 'up' : 'down'}">${o.trend >= 0 ? '▲' : '▼'} ${Math.abs(r0(o.trend))} vs the 5 before</small>`;
     el.innerHTML = `
       <div class="toolbar"><label class="field evsel"><span>Runs to analyse</span><select id="st-range">
@@ -320,15 +296,16 @@ export function statsView(root, ctx) {
       </div>
       <section class="card"><h2>Weakest individual tasks</h2><p class="muted small">The single steps that succeed least often.</p>
         <ul class="bars">${st.weakestTasks.map((t) => `<li><span class="bl">M${String(t.num).padStart(2, '0')} · ${esc(t.label)}</span>${bar(t.rate, 'bad')}<span class="bv">${r0(t.rate)}%</span></li>`).join('')}</ul></section>
-      <section class="card"><h2>Every mission</h2><p class="muted small">Success rate = runs with full marks. Tap a mission for its individual tasks.</p>
+      <section class="card"><h2>Every mission</h2><p class="muted small">Tap a mission for its tasks.</p>
         <div class="mlist">${st.missions.map((m) => `<details class="mrow"><summary><span class="bl"><b>${esc(mname(m))}</b><small>avg ${f1(m.avg)} / ${m.max} · scored in ${r0(m.scoredRate)}% of runs</small></span>${bar(m.fullRate, m.fullRate >= 70 ? 'good' : m.fullRate < 30 ? 'bad' : '')}<span class="bv">${r0(m.fullRate)}%<small> full</small></span></summary>
           <ul class="bars sub">${m.tasks.map((t) => `<li><span class="bl">${esc(t.label)}${t.kind === 'count' ? `<small>avg ${f1(t.avg)} of ${t.max}</small>` : ''}</span>${bar(t.rate)}<span class="bv">${r0(t.rate)}%</span></li>`).join('')}</ul></details>`).join('')}</div></section>
       <section class="card"><h2>Practice history</h2><ul class="history">${runs.slice().sort((a, b) => b.createdAt - a.createdAt).map((r) => `
         <li><button class="linkish" data-run="${esc(r.id)}"><b>${r.total}</b> pts <small>${new Date(r.createdAt).toLocaleString()}${r.by ? ` · ${esc(r.by)}` : ''}${r.note ? ` · “${esc(r.note)}”` : ''}</small></button>
-        ${isCoachOn(u, u.teamId) || r.uid === u.uid ? `<button class="btn ghost small" data-del="${esc(r.id)}" aria-label="Delete run from ${new Date(r.createdAt).toLocaleString()}">Delete</button>` : ''}</li>`).join('')}</ul></section>`;
+        <button class="btn ghost small" data-edit="${esc(r.id)}" aria-label="Edit run from ${new Date(r.createdAt).toLocaleString()}">Edit</button><button class="btn ghost small" data-del="${esc(r.id)}" aria-label="Delete run from ${new Date(r.createdAt).toLocaleString()}">Delete</button></li>`).join('')}</ul></section>`;
   }
   root.addEventListener('change', (e) => { if (e.target.id === 'st-range') { range = e.target.value; render(); } });
   root.addEventListener('click', async (e) => {
+    const ed = e.target.closest('[data-edit]'); if (ed) return onEdit(ed.dataset.edit);
     const d = e.target.closest('[data-del]'), v = e.target.closest('[data-run]');
     if (d && confirm('Delete this practice run?')) { try { await ctx.store.remove('practice', d.dataset.del); } catch (x) { toast(x.message, 'err'); } }
     if (v) {
@@ -348,7 +325,10 @@ export function statsView(root, ctx) {
 export function teamView(root, ctx) {
   let u = ctx.user();
   if (!u) return gate(root, 'Sign in to see your teams — or join one with its team number and password.', ctx);
-  let people = [], joined = [], secret = null, colors = [], sig = '';
+  let people = [], joined = [], secret = null, colors = [], sig = '', panels = {};
+  const hk = location.hash.replace(/^#\/?/, '').split('?');
+  let tab = { practice: 'practice', analytics: 'advanced' }[hk[0]] || 'stats';
+  let pendingEdit = new URLSearchParams(hk[1] || '').get('edit'); if (pendingEdit) tab = 'practice';
   const $ = (q) => root.querySelector(q);
   const run = async (fn) => { try { await fn(); } catch (x) { toast(x.message, 'err'); } };
   const teamOf = (id) => ctx.teams().find((t) => t.id === id);
@@ -356,6 +336,31 @@ export function teamView(root, ctx) {
   const coach = () => isCoachOn(u, u.teamId);
   const signature = () => JSON.stringify([u.teams.map((t) => [t.teamId, t.role]), u.teamId]);
 
+  // The team page is one place: stats (automatic), advanced analytics, practice runs (add / edit) and, for coaches, settings.
+  function showTab(name, edit = null) {
+    if (!u?.teamId) return;
+    if (name === 'manage' && !coach()) name = 'stats';
+    tab = name;
+    root.querySelectorAll('[data-tab]').forEach((b) => { const on = b.dataset.tab === name; b.setAttribute('aria-selected', String(on)); b.classList.toggle('on', on); });
+    for (const t of ['stats', 'advanced', 'practice', 'manage']) { const p = $('#tp-' + t); if (p) p.hidden = t !== name; }
+    if (name === 'advanced' && !panels.advanced) panels.advanced = analyticsView($('#tp-advanced'), ctx);
+    if (name === 'practice') mountPractice(edit); else unmountPractice();
+  }
+  function unmountPractice() { panels.practice?.destroy?.(); panels.practice = null; const p = $('#tp-practice'); if (p) p.innerHTML = ''; }
+  function mountPractice(editId) {
+    unmountPractice();
+    const host = $('#tp-practice'); const done = () => showTab('stats');
+    const mount = (editRun) => { if (tab !== 'practice') return; host.innerHTML = `${editRun ? '<h3>Edit practice run</h3>' : ''}<div id="sc"></div>`; panels.practice = mountScorer(host.querySelector('#sc'), { mode: 'practice', store: ctx.store, teams: ctx.teams, scores: ctx.scores, user: ctx.user, lockedTeamId: u.teamId, editRun, onDone: done }); };
+    if (!editId) return mount(null);
+    ctx.store.get('practice', editId).then((r) => { if (r && r.teamId === u.teamId) mount(r); else { toast('That run isn’t on this team', 'err'); done(); } }).catch((x) => { toast(x.message, 'err'); done(); });
+  }
+  function mountPanels() {
+    Object.values(panels).forEach((p) => p?.destroy?.()); panels = {};
+    if (!u.teamId) return;
+    panels.stats = statsView($('#tp-stats'), ctx, { onEdit: (id) => showTab('practice', id) });
+    const edit = pendingEdit; pendingEdit = null;
+    showTab(tab, edit);
+  }
   async function loadSecret() { secret = coach() ? await ctx.store.get('teamSecrets', u.teamId).catch(() => null) : null; paintPw(); }
   function build() {
     u = ctx.user(); if (!u) return;
@@ -363,7 +368,37 @@ export function teamView(root, ctx) {
     root.innerHTML = `<h1 class="page-title">Teams</h1>
       <section class="card"><h2>Your teams</h2>
         <ul class="teamlist" id="tm-list"></ul>
-        <p class="muted small">Your role is <b>per team</b>: you’re a coach only where a coach or admin added you as one — everywhere else you’re a team member or parent. The team marked <b>Active</b> is the one Practice and Stats use.</p></section>
+        <p class="muted small">Tap a team to see its stats and add practice runs.</p></section>
+      <section class="teamdetail" id="tm-detail" ${u.teamId ? '' : 'hidden'}>
+        <div class="card"><h2 id="td-title">Team</h2>
+          <div class="tabs" role="tablist">
+            <button type="button" role="tab" id="td-stats" data-tab="stats">📊 Stats</button>
+            <button type="button" role="tab" id="td-advanced" data-tab="advanced">📈 Advanced</button>
+            <button type="button" role="tab" id="td-practice" data-tab="practice">➕ Practice run</button>
+            ${coach() ? '<button type="button" role="tab" id="td-manage" data-tab="manage">⚙️ Manage</button>' : ''}</div></div>
+        <div id="tp-stats" class="tabpanel"></div>
+        <div id="tp-advanced" class="tabpanel" hidden></div>
+        <div id="tp-practice" class="tabpanel" hidden></div>
+        ${coach() ? `<div id="tp-manage" class="tabpanel" hidden>
+      <section class="card teamhead"><h2 id="t-title">Team</h2>
+        <form id="t-rename" class="inline"><label class="field grow"><span>Team name</span><input id="t-name" maxlength="60" required></label><button class="btn primary">Save name</button></form>
+        <h3>Team colors <small>(up to 3)</small></h3>
+        <div class="colorrow" id="t-colors"></div>
+        <div class="row-actions"><button class="btn small" id="t-addcolor" type="button">Add color</button><button class="btn primary small" id="t-savecolors" type="button">Save colors</button></div></section>
+      <section class="card"><h2>Team password</h2>
+        <p class="muted small">Members join with this password. Turn it off to add people by email instead.</p>
+        <p class="pwstate" id="t-pwstate"></p>
+        <div class="row-actions"><button class="btn primary" id="t-pw" type="button">Show / change team password</button><button class="btn ghost" id="t-pwtoggle" type="button">Turn off</button></div>
+        <h3>Joined with the password <small id="t-pwcount"></small></h3><ul class="admin-list" id="t-pwlist"></ul></section>
+      <section class="card"><h2>People on this team</h2>
+        <p class="muted small">Add people by Google email. Coaches can also manage the team.</p>
+        <form id="t-add" class="grid-user" novalidate><label class="field"><span>Google email</span><input id="t-email" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label>
+          <label class="field"><span>Role on this team</span><select id="t-role"><option value="member">Team member</option><option value="coach">Coach</option></select></label>
+          <label class="field"><span>Name or note <small>(optional)</small></span><input id="t-pname" maxlength="40" placeholder="e.g. Sam’s mom"></label>
+          <button class="btn primary">Add person</button></form>
+        <div id="t-err" class="error" role="alert" hidden></div>
+        <ul class="admin-list" id="t-people"></ul></section></div>` : ''}
+      </section>
       <section class="card"><h2>Add a team</h2>
         <p class="muted small">Enter the team’s <b>number and name</b> and its <b>team password</b> (ask the coach). It’s saved on this device${u.email ? ' and linked to your Google account, so it follows you to other devices' : ''}. Teams a coach adds you to show up above automatically.</p>
         <form id="tm-add" class="grid-user" novalidate>
@@ -372,30 +407,11 @@ export function teamView(root, ctx) {
           <label class="field"><span>Team password</span><input id="tm-pw" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>
           <button class="btn primary">Add team</button></form>
         <datalist id="tm-names"></datalist>
-        <div id="tm-err" class="error" role="alert" hidden></div></section>
-      ${coach() ? `<div id="tm-manage">
-      <section class="card teamhead"><h2 id="t-title">Team</h2>
-        <form id="t-rename" class="inline"><label class="field grow"><span>Team name</span><input id="t-name" maxlength="60" required></label><button class="btn primary">Save name</button></form>
-        <p class="muted small">Only an admin can change the team number.</p>
-        <h3>Team colors <small>(up to 3)</small></h3>
-        <div class="colorrow" id="t-colors"></div>
-        <div class="row-actions"><button class="btn small" id="t-addcolor" type="button">Add color</button><button class="btn primary small" id="t-savecolors" type="button">Save colors</button></div></section>
-      <section class="card"><h2>Team password</h2>
-        <p class="muted small">Anyone you give this password to can join as a <b>team member</b> from the Sign in page or the Teams tab (practice runs + team stats only). It’s ON by default — turn it off if you’d rather add people by Google email. Coaches always use Google.</p>
-        <p class="pwstate" id="t-pwstate"></p>
-        <div class="row-actions"><button class="btn primary" id="t-pw" type="button">Show / change team password</button><button class="btn ghost" id="t-pwtoggle" type="button">Turn off</button></div>
-        <h3>Joined with the password <small id="t-pwcount"></small></h3><ul class="admin-list" id="t-pwlist"></ul></section>
-      <section class="card"><h2>People on this team</h2>
-        <p class="muted small">Add anyone by their Google (gmail) address. <b>Members</b> (parents, mentors, teammates) get practice runs and stats; <b>coaches</b> can also manage this team. Someone can coach several teams and be a plain member of others.</p>
-        <form id="t-add" class="grid-user" novalidate><label class="field"><span>Google email</span><input id="t-email" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label>
-          <label class="field"><span>Role on this team</span><select id="t-role"><option value="member">Team member</option><option value="coach">Coach</option></select></label>
-          <label class="field"><span>Name or note <small>(optional)</small></span><input id="t-pname" maxlength="40" placeholder="e.g. Sam’s mom"></label>
-          <button class="btn primary">Add person</button></form>
-        <div id="t-err" class="error" role="alert" hidden></div>
-        <ul class="admin-list" id="t-people"></ul></section></div>` : ''}`;
+        <div id="tm-err" class="error" role="alert" hidden></div></section>`;
     $('#tm-add').addEventListener('submit', onJoin);
     $('#tm-num').addEventListener('input', autofill); $('#tm-tname').addEventListener('input', autofill);
     if (coach()) bindManage();
+    mountPanels();
     render(); loadSecret();
   }
 
@@ -407,8 +423,11 @@ export function teamView(root, ctx) {
       const team = teamOf(t.teamId), active = t.teamId === u.teamId;
       return `<li class="trow ${active ? 'on' : ''}" data-tid="${esc(t.teamId)}"><span class="tmain">${teamDots(team)}<b>${esc(team ? `#${team.number} ${team.name}` : t.teamId)}</b>
         <span class="badge ${t.role === 'coach' ? 'live-b' : ''}">${t.role === 'coach' ? 'Coach' : 'Member'}</span><small class="block">${t.via === 'password' ? 'joined with the team password' : t.role === 'coach' ? 'you coach this team' : 'added by a coach'}</small></span>
-        <span class="acts">${active ? '<span class="badge on">Active</span>' : `<button class="btn small" data-use="${esc(t.teamId)}">Use this team</button>`}${t.role === 'coach' ? '' : `<button class="btn ghost small danger" data-leave="${esc(t.teamId)}" aria-label="Leave ${esc(label(t.teamId))}">Leave</button>`}</span></li>`;
+        <span class="acts">${active ? '<span class="badge on">Active</span>' : `<button class="btn small" data-use="${esc(t.teamId)}">Open</button>`}${t.role === 'coach' ? '' : `<button class="btn ghost small danger" data-leave="${esc(t.teamId)}" aria-label="Leave ${esc(label(t.teamId))}">Leave</button>`}</span></li>`;
     }).join('') || '<li class="empty">You aren’t on a team yet — add one below.</li>';
+    const dt = teamOf(u.teamId);
+    if (u.teamId) panels.practice?.refresh?.();
+    $('#td-title').textContent = dt ? `#${dt.number} ${dt.name}` : 'Team';
     if (!coach()) return;
     const t = teamOf(u.teamId);
     $('#t-title').textContent = t ? `Manage #${t.number} ${t.name}` : 'Manage team';
@@ -477,7 +496,8 @@ export function teamView(root, ctx) {
     if (g('#t-addcolor')) { if (colors.length < 3) { colors.push('#1a9e6b'); paintColors(); } return; }
     if (g('#t-savecolors')) return run(async () => { await ctx.store.patch('teams', u.teamId, { colors: colors.slice(0, 3) }); toast('Team colors saved', 'ok'); });
     const rc = g('[data-rmcolor]'); if (rc) { colors.splice(+rc.dataset.rmcolor, 1); return paintColors(); }
-    const use = g('[data-use]'); if (use) return ctx.store.setActiveTeam(use.dataset.use);
+    const tb = g('[data-tab]'); if (tb) return showTab(tb.dataset.tab);
+    const row = g('#tm-list .trow'); const use = g('[data-use]') || (row && !g('button, a') && row.dataset.tid !== u.teamId ? { dataset: { use: row.dataset.tid } } : null); if (use) return ctx.store.setActiveTeam(use.dataset.use);
     const lv = g('[data-leave]');
     if (lv) { if (confirm(`Leave ${label(lv.dataset.leave)}? You can add it again later.`)) run(async () => { await ctx.store.leaveTeam(lv.dataset.leave); toast('Left the team', 'ok'); }); return; }
     const w = g('[data-rmpw]');
@@ -487,14 +507,14 @@ export function teamView(root, ctx) {
   });
   const unsubs = [ctx.store.subscribe('roster', (r) => { people = r; render(); }), ctx.store.subscribe('teamMembers', (r) => { joined = r.filter((x) => x.uid !== u.uid); render(); })];
   build();
-  return { update: render, destroy: () => { unsubs.forEach((f) => f()); ctx.passwordChanged = null; } };
+  return { update: render, destroy: () => { unsubs.forEach((f) => f()); Object.values(panels).forEach((p) => p?.destroy?.()); ctx.passwordChanged = null; } };
 }
 
 // ───────────────────────────── Admin ─────────────────────────────
 export function adminView(root, ctx) {
   const u = ctx.user();
   if (!u) return gate(root, 'Admins sign in to manage the event.', ctx);
-  if (u.role !== 'admin') { root.innerHTML = '<section class="card narrow"><h1>Admins only</h1><p class="muted">Ask an event admin if a score needs correcting.</p></section>'; return {}; }
+  if (u.role !== 'admin') { root.innerHTML = '<section class="card narrow"><h1>Admins only</h1><p class="muted">Admin only.</p></section>'; return {}; }
   let people = [], roster = [];
   const demo = ctx.store.mode === 'demo';
   root.innerHTML = `<h1 class="page-title">Admin console</h1>
@@ -507,12 +527,12 @@ export function adminView(root, ctx) {
       <form id="a-team" class="grid-user" novalidate><label class="field"><span>Number <small>(required)</small></span><input id="a-tn" inputmode="numeric" pattern="[0-9]*" maxlength="6" required></label>
         <label class="field"><span>Team name <small>(required)</small></span><input id="a-tname" maxlength="60" required></label>
         <label class="field"><span>Designated coach’s Google email</span><input id="a-tcoach" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label><button class="btn primary">Add team</button></form>
-      <p class="muted small">Each new team gets a random 6-digit <b>team password</b> so members can sign in without Google. The coach can change it and add more coaches or members.</p>
+      <p class="muted small">Each new team gets a team password.</p>
       <div id="a-terr" class="error" role="alert" hidden></div>
       <details class="bulk"><summary>Bulk add (paste “number, name, coach@gmail.com” per line — coach optional)</summary><textarea id="a-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers, coach@gmail.com&#10;5530, Byte Me"></textarea><button class="btn ghost" id="a-bulkgo" type="button">Add all</button></details>
       <ul class="admin-list" id="a-teams"></ul></section>
     <section class="card"><h2>People &amp; access</h2>
-      <p class="muted small">Only Google accounts listed here can sign in. Add <b>coaches</b> to a team (as many per team as you like, and one coach can coach several teams — admins, hosts and judges can coach too). Coaches then add their own team members. <b>Event hosts</b> are assigned per event in the Events card above. Give <b>admin</b> access to anyone by their gmail.</p>
+      <p class="muted small">Add coaches, judges, hosts and admins by Google email. Hosts are set per event.</p>
       <form id="a-user" class="grid-user" novalidate><label class="field"><span>Google email</span><input id="a-ue" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label>
         <label class="field"><span>Role</span><select id="a-ur"><option value="coach">Coach of a team</option><option value="member">Team member</option><option value="judge">Judge</option><option value="host">Event host</option><option value="admin">Admin</option></select></label>
         <label class="field" id="a-ut-wrap"><span>Team</span><select id="a-ut"></select></label>
@@ -543,7 +563,8 @@ export function adminView(root, ctx) {
     };
     const rosterRows = roster.slice().sort((a, b) => a.teamId.localeCompare(b.teamId) || (a.role === 'coach' ? 0 : 1) - (b.role === 'coach' ? 0 : 1) || a.email.localeCompare(b.email));
     const rosterHtml = rosterRows.length ? `<h3>Team rosters <small>(${rosterRows.length})</small></h3><ul class="admin-list">${rosterRows.map((r) => `<li><span><b>${esc(r.name || r.email.split('@')[0])}</b> <span class="badge ${r.role === 'coach' ? 'live-b' : ''}">${r.role === 'coach' ? 'Coach' : 'Member'}</span><small class="block">${esc(r.email)} · ${esc(teamName(r.teamId))}</small></span>
-      <button class="btn ghost small danger" data-rmroster="${esc(r.id)}" aria-label="Remove ${esc(r.email)} from ${esc(teamName(r.teamId))}">Remove</button></li>`).join('')}</ul>` : '';
+      <span class="acts"><button class="btn ghost small" data-setrole="${esc(r.id)}" data-role="${r.role === 'coach' ? 'member' : 'coach'}">${r.role === 'coach' ? 'Make member' : 'Make coach'}</button>
+      <button class="btn ghost small danger" data-rmroster="${esc(r.id)}" aria-label="Remove ${esc(r.email)} from ${esc(teamName(r.teamId))}">Remove</button></span></li>`).join('')}</ul>` : '';
     $('#a-users').innerHTML = grp('admin', 'Admins') + grp('host', 'Event hosts') + grp('judge', 'Judges & referees') + rosterHtml || '<p class="empty">Nobody listed.</p>';
     const sc = ctx.scores().slice().sort((a, b) => (a.eventId || '').localeCompare(b.eventId || '') || a.number - b.number || a.round - b.round);
     $('#a-scores').innerHTML = sc.map((s) => `<tr><td>${esc(evName(s.eventId))}</td><td>#${esc(s.number)} ${esc(s.name)}</td><td>${s.round}</td><td class="num"><b>${s.total}</b></td><td>${esc(s.judgeName || '')}</td>
@@ -556,7 +577,7 @@ export function adminView(root, ctx) {
     const dlg = modal('<div id="h-body"></div>', { title: `Hosts · ${ev.name}` });
     const emails = () => (ctx.eventHosts().find((h) => h.id === eventId)?.emails || []);
     const paint = () => {
-      dlg.querySelector('#h-body').innerHTML = `<p class="muted small">“Host” is a modifier for this event only, so a coach or judge can be a host too. Hosts add teams, choose which teams compete, generate the schedule, add referees and enter scores for this event.</p>
+      dlg.querySelector('#h-body').innerHTML = `<p class="muted small">Hosts manage this event’s teams, schedule and scores.</p>
         <ul class="admin-list">${emails().map((m) => `<li><span>${esc(m)}</span><button class="btn ghost small danger" data-hrm="${esc(m)}" aria-label="Remove host ${esc(m)}">Remove</button></li>`).join('') || '<li class="empty">No hosts yet.</li>'}</ul>
         <form id="h-add" class="inline" novalidate><label class="field grow"><span>Host’s Google email</span><input id="h-email" type="email" inputmode="email" autocapitalize="none" autocomplete="off" required></label><button class="btn primary">Add host</button></form>
         <div id="h-err" class="error" role="alert" hidden></div>`;
@@ -620,7 +641,7 @@ export function adminView(root, ctx) {
       made.push(await createTeam(ctx.store, u, { number: +m[1], name: m[2].trim(), coachEmail: m[3] || '' }));
     }
     $('#a-bulk').value = '';
-    if (made.length) { const dlg = modal(`<p>${made.length} team${made.length === 1 ? '' : 's'} added. Team passwords:</p><div class="table-scroll"><table class="data"><thead><tr><th>Team</th><th>Password</th><th>Coach</th></tr></thead><tbody>${made.map((r) => `<tr><td>#${esc(r.number)} ${esc(r.name)}</td><td><code>${esc(r.password)}</code></td><td>${esc(r.coach === 'added' ? r.coachEmail : r.coach === 'none' ? '—' : `${r.coachEmail} (not changed)`)}</td></tr>`).join('')}</tbody></table></div><p class="muted small">You can see or change any team’s password later with the Password button.</p>`, { title: 'Teams created' }); void dlg; } else toast('No new teams to add', 'err');
+    if (made.length) { const dlg = modal(`<p>${made.length} team${made.length === 1 ? '' : 's'} added. Team passwords:</p><div class="table-scroll"><table class="data"><thead><tr><th>Team</th><th>Password</th><th>Coach</th></tr></thead><tbody>${made.map((r) => `<tr><td>#${esc(r.number)} ${esc(r.name)}</td><td><code>${esc(r.password)}</code></td><td>${esc(r.coach === 'added' ? r.coachEmail : r.coach === 'none' ? '—' : `${r.coachEmail} (not changed)`)}</td></tr>`).join('')}</tbody></table></div>`, { title: 'Teams created' }); void dlg; } else toast('No new teams to add', 'err');
   }));
   $('#a-user').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -651,6 +672,7 @@ export function adminView(root, ctx) {
     if (d.rename) { const cur = ctx.teams().find((x) => x.id === d.rename); const name = prompt('New team name', cur?.name || ''); if (name?.trim()) run(() => ctx.store.patch('teams', d.rename, { name: name.trim() })); }
     if (d.delscore && confirm('Delete this official score? The match can then be re-scored.')) run(() => ctx.store.remove('scores', d.delscore));
     if (d.rmp && confirm(`Remove ${d.rmp}? They will no longer be able to sign in.`)) run(async () => { for (const r of roster.filter((x) => x.email === d.rmp)) await ctx.store.remove('roster', r.id); await ctx.store.remove('access', d.rmp); });
+    if (d.setrole) run(async () => { await ctx.store.patch('roster', d.setrole, { role: d.role }); toast(d.role === 'coach' ? 'Now a coach of this team' : 'Now a team member', 'ok'); });
     if (d.rmroster && confirm('Remove this person from the team? (Their account and other teams stay.)')) run(() => ctx.store.remove('roster', d.rmroster));
     if (d.delev && confirm('Delete this event? Its scores stay in the database but no longer show on the dashboard.')) run(async () => { await ctx.store.remove('events', d.delev); if (ctx.eventHosts().some((h) => h.id === d.delev)) await ctx.store.remove('eventHosts', d.delev); });
     if (d.evmanage) { try { localStorage.setItem(MANAGE_KEY, d.evmanage); } catch { /* ignore */ } ctx.go('#/event'); }
@@ -730,9 +752,12 @@ export function eventView(root, ctx) {
   const mine = () => hostedEvents(u, ctx.events(), ctx.eventHosts()).sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0));
   const cur = () => { const list = mine(); return list.find((e) => e.id === selId) || list[0] || null; };
 
+  const newEventForm = (u) => (u.role === 'admin' ? `<section class="card"><h2>Add an event</h2>
+        <form id="e-newev" class="inline"><label class="field grow"><span>Event name</span><input id="e-nevn" maxlength="80" required></label>
+          <label class="field"><span>Date</span><input id="e-nevd" type="date"></label><button class="btn primary">Add event</button></form></section>` : '');
   function draw() {
     const list = mine(), ev = cur();
-    if (!ev) { host.innerHTML = `<section class="card narrow"><h2>No events yet</h2><p class="muted">${u.role === 'admin' ? 'Create an event on the Admin page first.' : 'An admin needs to assign you to an event. Ask them to add your Google account under Events → Hosts.'}</p></section>`; return; }
+    if (!ev) { host.innerHTML = newEventForm(u) + `<section class="card narrow"><h2>No events yet</h2><p class="muted">${u.role === 'admin' ? 'Add one above.' : 'An admin needs to assign you to an event. Ask them to add your Google account under Events → Hosts.'}</p></section>`; return; }
     const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
     if (pickKey !== ev.id) { picks = new Set(ev.teamIds || []); pickKey = ev.id; draft = null; cfgIn = null; seed = 1; }
     if (refsFor !== ev.id) { refsFor = ev.id; refs = []; setTimeout(loadRefs, 0); }
@@ -740,26 +765,27 @@ export function eventView(root, ctx) {
     const shown = draft || ev.schedule || null;
     const evTeams = eventTeams(ev, teams);
     host.innerHTML = `
+      ${newEventForm(u)}
       ${list.length > 1 ? `<label class="field evsel"><span>Event</span><select id="e-sel">${list.map((e) => `<option value="${esc(e.id)}" ${e.id === ev.id ? 'selected' : ''}>${esc(e.name)}${e.live ? ' · live' : ''}</option>`).join('')}</select></label>` : `<h2 class="evtitle">${esc(ev.name)}</h2>`}
       <section class="card"><h2>Teams at this event <small id="e-teamcount">(${evTeams.length}${ev.teamIds?.length ? '' : ' · all teams'})</small></h2>
         <form id="e-team" class="grid-user" novalidate><label class="field"><span>Number <small>(required)</small></span><input id="e-tn" inputmode="numeric" pattern="[0-9]*" maxlength="6" required></label>
           <label class="field"><span>Team name <small>(required)</small></span><input id="e-tname" maxlength="60" required></label>
           <label class="field"><span>Designated coach’s Google email</span><input id="e-tcoach" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label><button class="btn primary">Add team</button></form>
-        <p class="muted small">Each new team gets a random 6-digit team password for member sign-in (shown once after you add it; use 🔑 below to see it again).</p>
+        <p class="muted small">Each new team gets a team password.</p>
         <div id="e-terr" class="error" role="alert" hidden></div>
         <details class="bulk"><summary>Bulk add (paste “number, name, coach@gmail.com” per line — coach optional)</summary><textarea id="e-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers, coach@gmail.com&#10;5530, Byte Me"></textarea><button class="btn ghost" id="e-bulkgo" type="button">Add all</button></details>
-        <p class="muted small">Tick the teams competing here, then save. Leave all unticked to include every team.</p>
+        <p class="muted small">Tick the teams at this event. None ticked = all teams.</p>
         <div class="row-actions"><button class="btn ghost small" id="e-all" type="button">Tick all</button><button class="btn ghost small" id="e-none" type="button">Clear</button></div>
         <div class="checklist" id="e-checks">${checksHTML(teams)}</div>
         <button class="btn primary" id="e-saveteams" type="button">Save teams</button></section>
       <section class="card"><h2>Referees &amp; judges</h2>
-        <p class="muted small">Anyone can referee this event — a coach, a team member, or someone new. Add their Google email: they can enter official scores for <b>this event only</b>, and keep any other role they have.</p>
+        <p class="muted small">Referees can enter scores for this event.</p>
         <form id="e-ref" class="grid-user" novalidate><label class="field"><span>Google email</span><input id="r-email" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label>
           <label class="field"><span>Name <small>(optional)</small></span><input id="r-name" maxlength="40"></label><button class="btn primary">Add referee</button></form>
         <div id="r-err" class="error" role="alert" hidden></div>
         <ul class="admin-list" id="e-reflist">${refsHTML()}</ul></section>
       <section class="card"><h2>Match schedule</h2>
-        <p class="muted small">Auto-generates a schedule for the ${evTeams.length} team${evTeams.length === 1 ? '' : 's'} above: every team plays every round, tables rotate, and no team plays back-to-back when it can be avoided.</p>
+        <p class="muted small">Builds a schedule for ${evTeams.length} team${evTeams.length === 1 ? '' : 's'}.</p>
         <form id="e-cfg" class="sched-form" novalidate>
           <label class="field"><span>Rounds</span><input id="c-rounds" type="number" inputmode="numeric" min="${LIMITS.rounds[0]}" max="${LIMITS.rounds[1]}" value="${cfg.rounds}"></label>
           <label class="field"><span>Tables</span><input id="c-tables" type="number" inputmode="numeric" min="${LIMITS.tables[0]}" max="${LIMITS.tables[1]}" value="${cfg.tables}"></label>
@@ -767,7 +793,10 @@ export function eventView(root, ctx) {
           <label class="field"><span>Minutes per match</span><input id="c-interval" type="number" inputmode="numeric" min="${LIMITS.interval[0]}" max="${LIMITS.interval[1]}" value="${cfg.interval}"></label>
           <label class="field"><span>Break between rounds (min)</span><input id="c-break" type="number" inputmode="numeric" min="${LIMITS.breakMin[0]}" max="${LIMITS.breakMin[1]}" value="${cfg.breakMin}"></label>
           <div class="row-actions"><button class="btn primary" id="e-gen" type="submit">${draft ? 'Shuffle again' : 'Generate schedule'}</button></div></form>
-        <div id="e-sched">${shown?.rows?.length ? schedBlock(shown, ev, evTeams) : '<p class="empty">No schedule yet — set the options above and generate one.</p>'}</div></section>`;
+        <div id="e-sched">${shown?.rows?.length ? schedBlock(shown, ev, evTeams) : '<p class="empty">No schedule yet — set the options above and generate one.</p>'}</div></section>
+      <section class="card"><h2>Official scores</h2>
+        <p class="muted small">Delete a score so the match can be scored again.</p>
+        <ul class="admin-list" id="e-scores">${scoresHTML(ev)}</ul></section>`;
   }
   const checksHTML = (teams) => teams.map((t) => `<div class="checkrow"><label class="check"><input type="checkbox" data-tid="${esc(t.id)}" ${picks.has(t.id) ? 'checked' : ''}> <span><b>#${esc(t.number)}</b> ${esc(t.name)}</span></label>${u.role === 'admin' || t.createdBy === u.email ? `<button class="btn ghost small" type="button" data-teampw="${esc(t.id)}" aria-label="Team password for ${esc(t.name)}">🔑</button>` : ''}</div>`).join('') || '<p class="empty">No teams yet — add one above.</p>';
   // Refresh just the lists (not the forms), so typing / Enter-to-submit never loses focus or half-typed input.
@@ -776,7 +805,13 @@ export function eventView(root, ctx) {
     const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
     const c = host.querySelector('#e-checks'); if (c) c.innerHTML = checksHTML(teams);
     const r = host.querySelector('#e-reflist'); if (r) r.innerHTML = refsHTML();
+    const sl = host.querySelector('#e-scores'); if (sl) sl.innerHTML = scoresHTML(ev);
     const h = host.querySelector('#e-teamcount'); if (h) { const n = eventTeams(ev, ctx.teams()).length; h.textContent = `(${n}${ev.teamIds?.length ? '' : ' · all teams'})`; }
+  }
+  function scoresHTML(ev) {
+    const rows = ctx.scores().filter((x) => x.eventId === ev.id).sort((x, y) => x.number - y.number || x.round - y.round);
+    return rows.map((x) => `<li><span><b>#${esc(x.number)} ${esc(x.name)}</b> · match ${x.round} · <b>${x.total}</b> pts<small class="block">${x.table ? `table ${esc(x.table)} · ` : ''}${esc(x.judgeName || '')}</small></span>
+      <button class="btn ghost small danger" data-delscore="${esc(x.id)}" aria-label="Delete score for ${esc(x.name)} match ${x.round}">Delete</button></li>`).join('') || '<li class="empty">No scores yet.</li>';
   }
   function refsHTML() {
     return refs.map((email) => { const p = people.find((x) => x.id === email); return `<li><span><b>${esc(p?.name || email.split('@')[0])}</b><small class="block">${esc(email)}${p && p.role !== 'judge' ? ` · also ${esc(ROLE_LABEL[p.role].toLowerCase())}` : ''}</small></span>
@@ -792,7 +827,6 @@ export function eventView(root, ctx) {
         ${draft ? '<button class="btn primary" id="e-save" type="button">Save schedule</button>' : ''}
         <button class="btn ghost" id="e-csv" type="button">Download CSV</button>
         <button class="btn ghost" id="e-copy" type="button">Copy for Google Sheets</button>
-        <button class="btn ghost" id="e-sheets" type="button" ${sheetsConfigured() ? '' : 'title="Google Sheets isn’t connected yet"'}>Send to Google Sheets${sheetsConfigured() ? '' : ' (not set up)'}</button>
         ${!draft && ev.schedule ? '<button class="btn ghost danger" id="e-clear" type="button">Delete saved schedule</button>' : ''}</div>
       ${scheduleTableHTML(sch, evTeams)}`;
   }
@@ -806,6 +840,16 @@ export function eventView(root, ctx) {
   host.addEventListener('submit', (e) => {
     e.preventDefault();
     const ev = cur();
+    if (e.target.id === 'e-newev') {
+      const name = host.querySelector('#e-nevn').value.trim(); if (!name) return;
+      run(async () => {
+        const id = ctx.store.newId('e');
+        await ctx.store.put('events', id, { name, date: host.querySelector('#e-nevd').value || '', live: ctx.events().length === 0, createdAt: Date.now() });
+        selId = id; pickKey = ''; try { localStorage.setItem(MANAGE_KEY, id); } catch { /* ignore */ }
+        toast(`Event “${name}” added`, 'ok'); draw();
+      });
+      return;
+    }
     if (e.target.id === 'e-team') {
       const er = host.querySelector('#e-terr'); er.hidden = true;
       const number = parseInt(host.querySelector('#e-tn').value, 10), name = host.querySelector('#e-tname').value.trim(), coachEmail = normEmail(host.querySelector('#e-tcoach').value);
@@ -873,11 +917,11 @@ export function eventView(root, ctx) {
       host.querySelector('#e-bulk').value = '';
       if (made.length) modal(`<p>${made.length} team${made.length === 1 ? '' : 's'} added. Team passwords:</p><div class="table-scroll"><table class="data"><thead><tr><th>Team</th><th>Password</th><th>Coach</th></tr></thead><tbody>${made.map((r) => `<tr><td>#${esc(r.number)} ${esc(r.name)}</td><td><code>${esc(r.password)}</code></td><td>${esc(r.coach === 'added' ? r.coachEmail : r.coach === 'none' ? '—' : `${r.coachEmail} (not changed)`)}</td></tr>`).join('')}</tbody></table></div>`, { title: 'Teams created' }); else toast('No new teams to add', 'err');
     });
+    if (b.dataset.delscore && confirm('Delete this official score? The match can then be scored again.')) run(async () => { await ctx.store.remove('scores', b.dataset.delscore); toast('Score deleted', 'ok'); });
     if (b.id === 'e-save') run(async () => { await ctx.store.patch('events', ev.id, { schedule: { ...draft, generatedAt: Date.now(), generatedBy: u.email } }); draft = null; draw(); toast('Schedule saved — it’s now public on the Schedule page', 'ok'); });
     if (b.id === 'e-clear' && confirm('Delete the saved schedule?')) run(async () => { await ctx.store.patch('events', ev.id, { schedule: null }); draw(); });
     if (b.id === 'e-csv') downloadCSV(`${ev.name.replace(/\W+/g, '-').toLowerCase()}-schedule.csv`, exportTable());
     if (b.id === 'e-copy') run(async () => { toast((await copyForSheets(exportTable())) ? 'Copied — paste into Google Sheets (Ctrl+V)' : 'Couldn’t copy; use the CSV download', 'ok'); });
-    if (b.id === 'e-sheets') run(async () => { await sendToSheets(`${ev.name} schedule`, exportTable()); toast('Sent to Google Sheets', 'ok'); });
   });
   draw();
   const unsubPeople = ctx.store.subscribe('access', (r) => { people = r; const ev = cur(); const l = host.querySelector('#e-reflist'); if (l && ev) l.innerHTML = refsHTML(ev); });

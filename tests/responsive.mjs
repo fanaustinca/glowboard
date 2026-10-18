@@ -52,7 +52,8 @@ async function newPage(vp) {
   return page;
 }
 const go = async (page, hash = '') => { await page.goto(base + (hash ? '#/' + hash : ''), { waitUntil: 'networkidle0' }); await page.waitForSelector('main .page > *'); };
-const goHash = async (page, hash) => { await page.evaluate((h) => { location.hash = '#/' + h; }, hash); await page.waitForSelector('main .page > *'); await new Promise((r) => setTimeout(r, 120)); };
+const goHash = async (page, hash) => { await page.evaluate((h) => { location.hash = '#/' + h; }, hash); await page.waitForSelector('main .page > *'); await new Promise((r) => setTimeout(r, 120)); if (hash === 'team') { await page.evaluate(() => document.getElementById('td-manage')?.click()); await new Promise((r) => setTimeout(r, 80)); } };
+const openTab = async (page, t) => { await page.evaluate((x) => document.getElementById('td-' + x)?.click(), t); await new Promise((r) => setTimeout(r, 200)); };
 async function login(page, email) { // demo mode simulates Google sign-in with one button per demo role
   await goHash(page, 'login');
   await page.$eval(`[data-demo="${email}"]`, (e) => e.click());
@@ -130,6 +131,7 @@ for (const vp of VIEWPORTS) {
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'coach@demo.test');
   await check('practice page', async () => { await goHash(page, 'practice'); await assertLayout(page, 'practice'); await shot(page, `${vp.name}-practice`); });
+  await check('analytics page', async () => { await goHash(page, 'analytics'); await page.waitForSelector('.chart'); await new Promise((r) => setTimeout(r, 1600)); await assertLayout(page, 'analytics'); await shot(page, `${vp.name}-analytics`); });
   await check('stats page', async () => { await goHash(page, 'stats'); await assertLayout(page, 'stats'); await shot(page, `${vp.name}-stats`); });
   await check('my team page (coach)', async () => { await goHash(page, 'team'); await assertLayout(page, 'team'); await shot(page, `${vp.name}-team`); });
   await page.evaluate(() => document.getElementById('signout').click());
@@ -287,7 +289,7 @@ await check('judges cannot delete scores or touch teams/accounts', async () => {
 await page.evaluate(() => document.getElementById('signout').click());
 await login(page, 'coach@demo.test');
 await check('coach nav shows Practice, Team stats and My team only', async () => {
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Teams']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Teams']);
 });
 await check('team can save a practice run (no signature needed) and sees it in stats', async () => {
   await goHash(page, 'practice');
@@ -350,11 +352,16 @@ await check('coach: renames their team and adds/removes a member (but cannot tou
 });
 await page.evaluate(() => document.getElementById('signout').click());
 await login(page, 'member@demo.test');
-await check('member: practice + stats work, team page is read-only, cannot delete a teammate’s run', async () => {
+await check('member: practice + stats work, team page is read-only, can edit/delete team runs', async () => {
   await goHash(page, 'team'); assert.equal(await page.$('#t-add'), null); assert.equal(await page.$('#t-rename'), null);
   await goHash(page, 'stats'); assert.ok((await page.$$('.history li')).length >= 6);
   const del = await page.$$eval('.history li', (l) => l.filter((x) => x.querySelector('[data-del]')).length);
-  assert.ok(del < (await page.$$('.history li')).length, 'member only sees Delete on their own runs');
+  const n = (await page.$$('.history li')).length;
+  assert.equal(del, n, 'every team run can be deleted by a member'); assert.equal((await page.$$('.history li [data-edit]')).length, n, 'and edited');
+  const before = await page.$eval('.history li b', (b) => +b.textContent);
+  await page.$eval('.history li [data-edit]', (a) => a.click()); await page.waitForSelector('#sc-note'); await page.waitForSelector('#sc-submit');
+  await tap(page, '#sc-equip'); await page.type('#sc-note', 'edited'); await tap(page, '#sc-submit'); await page.waitForSelector('.toast.ok');
+  await page.waitForSelector('.history'); assert.match(await text(page, '.history'), /edited/, 'saving returns to the stats tab, which shows the edit');
 });
 await page.evaluate(() => document.getElementById('signout').click());
 await login(page, 'admin@demo.test');
@@ -446,8 +453,6 @@ await check('admin assigns an event host; host manages teams and builds + saves 
     await new Promise((r) => setTimeout(r, 200)); return captured;
   });
   assert.ok(csv.startsWith('Event,Round,Time,Table,Team number,Team name')); const nTeams = await page.$$eval('#e-checks [data-tid]', (c) => c.length); assert.equal(csv.trim().split('\n').length, 1 + nTeams * 4, `${nTeams} teams × 4 rounds`);
-  assert.match(await page.evaluate(() => document.getElementById('e-sheets').textContent), /not set up/);
-  await page.$eval('#e-sheets', (e) => e.click()); await page.waitForFunction(() => document.querySelector('.toast.err'));
   await page.$eval('#e-save', (e) => e.click()); await page.waitForFunction(() => /Saved schedule/.test(document.querySelector('#e-sched').textContent));
   await goHash(page, 'schedule');
   await page.$eval('#s-ev', (e) => { e.value = 'ev2'; e.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -486,9 +491,9 @@ await check('team password sign-in (demo): members join with number + password, 
   const join = async (num, pw, name = '') => { for (const [sel, v] of [['#tl-num', num], ['#tl-pw', pw], ['#tl-name', name]]) { await page.$eval(sel, (e) => { e.value = ''; }); if (v) await page.type(sel, v); } await tap(page, '#tl button'); await new Promise((r) => setTimeout(r, 300)); };
   await join('4201', 'wrong1'); assert.match(await text(page, '#lg-err'), /don’t match/);
   await join('4201', '424242', 'Sam');
-  assert.equal(await page.evaluate(() => location.hash), '#/practice');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Teams']);
-  await tap(page, '#sc-equip'); await tap(page, '#sc-submit'); await page.waitForSelector('.toast.ok');
+  assert.equal(await page.evaluate(() => location.hash), '#/team');
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Teams']);
+  await tap(page, '#td-practice'); await page.waitForSelector('#sc-equip'); await tap(page, '#sc-equip'); await tap(page, '#sc-submit'); await page.waitForSelector('.toast.ok');
   await goHash(page, 'stats'); assert.match(await text(page, '#st'), /Sam/, 'their name is on the run in the shared team history');
   await goHash(page, 'team'); assert.equal(await page.$('#t-add'), null);
   for (const [h, re] of [['judge', /Referees only/], ['admin', /Admins only/], ['event', /Hosts only/]]) { await goHash(page, h); assert.match(await text(page, 'main'), re, h); }
@@ -508,20 +513,20 @@ await check('team password sign-in (demo): members join with number + password, 
   await page.waitForFunction(() => document.querySelector('dialog #pw-code').textContent === 'robots2026'); await tap(page, 'dialog [data-close]');
   await page.evaluate(() => document.getElementById('signout').click());
   await goHash(page, 'login'); await join('4201', '424242'); assert.match(await text(page, '#lg-err'), /don’t match/);
-  await join('4201', 'robots2026'); assert.equal(await page.evaluate(() => location.hash), '#/practice');
+  await join('4201', 'robots2026'); assert.equal(await page.evaluate(() => location.hash), '#/team');
   await page.evaluate(() => document.getElementById('signout').click());
 });
 await check('coach who is also a host: coach pages + host pages, phone bar = 4 tabs + More, nothing leaks to other events', async () => {
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'cohost@demo.test');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Practice', 'Stats', 'Teams', 'Event']);
-  assert.equal(await page.$$eval('#nav > a', (a) => a.length), 4); assert.ok(await page.$('#nav-more'));
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Teams', 'Event']);
+  assert.equal(await page.$$eval('#nav > a', (a) => a.length), 5); assert.equal(await page.$('#nav-more'), null);
   assert.match(await text(page, '#who'), /host/i);
   const box = await page.$eval('#nav', (e) => { const r = e.getBoundingClientRect(); return { bottom: r.bottom, h: innerHeight, items: [...e.children].filter((c) => c.tagName !== 'DIV').map((c) => c.getBoundingClientRect().width) }; });
   assert.ok(Math.abs(box.bottom - box.h) < 2, 'tab bar is pinned to the bottom of the screen'); assert.ok(box.items.every((w) => w >= 60), 'each tab is at least 60px wide: ' + box.items);
-  await tap(page, '#nav-more'); await shot(page, 'flow-more-menu'); // (a full-page capture resizes the viewport, which can re-render the bar)
-  if (await page.$eval('#nav-sheet', (e) => e.hidden)) await tap(page, '#nav-more');
-  await tap(page, '#nav-sheet a[href="#/event"]'); await page.waitForSelector('#ev');
+
+
+  await tap(page, '#nav a[href="#/event"]'); await page.waitForSelector('#ev');
   assert.match(await text(page, '#ev'), /Season Opener/); assert.equal(await page.$('#e-sel'), null, 'only the event they host');
   await goHash(page, 'team'); assert.ok(await page.$('#t-add'), 'keeps coach powers');
   await goHash(page, 'practice'); assert.ok(await page.$('#sc-submit'), 'can submit practice runs for their team');
@@ -545,9 +550,9 @@ await check('Teams tab (demo): several teams with a role per team, add by number
   assert.ok(await page.$('#t-add'), 'coach tools on a team they coach');
   await tap(page, '[data-use="t4201"]'); await new Promise((r) => setTimeout(r, 300));
   assert.equal(await page.$('#t-add'), null, 'only a member of 4201 → no coach tools there'); assert.equal(await page.$('#t-pw'), null);
-  await goHash(page, 'practice'); assert.match(await text(page, '.page-title'), /Robo Rangers/); assert.ok(await page.$('#ts'), 'team switcher');
-  await page.select('#ts', 't7742'); await new Promise((r) => setTimeout(r, 300));
-  assert.match(await text(page, '.page-title'), /Canopy Coders/);
+  await goHash(page, 'practice'); assert.match(await text(page, '#td-title'), /Robo Rangers/); assert.ok(await page.$('#tp-practice #sc-submit'), 'practice tab opens inside the Teams page');
+  await goHash(page, 'team'); await tap(page, '[data-use="t7742"]'); await new Promise((r) => setTimeout(r, 300));
+  assert.match(await text(page, '#td-title'), /Canopy Coders/);
   // add a team with number + name + password
   await goHash(page, 'team');
   const add = async (num, nm, pw) => { for (const [sel, v] of [['#tm-num', num], ['#tm-tname', nm], ['#tm-pw', pw]]) { await page.$eval(sel, (e) => { e.value = ''; }); if (v) await page.type(sel, v); } await tap(page, '#tm-add button.primary'); await new Promise((r) => setTimeout(r, 350)); };

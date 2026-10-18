@@ -53,7 +53,7 @@ test('referee is a per-event modifier: eventJudges list (admin/host-of-event wri
 });
 test('events: admins create/delete; a host may change ONLY teamIds + schedule of events they host', () => {
   const b = block('events');
-  assert.deepEqual(allow(b, 'create'), ['isAdmin()']); assert.deepEqual(allow(b, 'delete'), ['isAdmin()']);
+  assert.deepEqual(allow(b, 'create'), ['isAdmin()']); assert.deepEqual(allow(b, 'delete'), ['isAdmin()']); assert.ok(!/isJudgeFor\(resource/.test(allow(b, 'update')[0] + allow(b, 'delete')[0]), 'judges can never replace or delete');
   const upd = allow(b, 'update')[0];
   assert.match(upd, /isHostOf\(eventId\)/); assert.match(upd, /affectedKeys\(\)\.hasOnly\(\['teamIds', 'schedule'\]\)/);
 });
@@ -142,10 +142,10 @@ test('access list: you can read your own entry; nobody lists it except admins an
   assert.match(allow(b, 'get')[0], /request\.auth\.token\.email == email/);
   assert.match(allow(b, 'list')[0], /^isAdmin\(\)/); assert.ok(!/myTeam|coachOf/.test(allow(b, 'list')[0]));
 });
-test('scores: judges create once per event+team+match; only admins update/delete', () => {
+test('scores: judges create once per event+team+match; only admins update; hosts of the event and admins delete', () => {
   const b = block('scores');
   assert.match(allow(b, 'create')[0], /^\(isJudgeFor\(request\.resource\.data\.eventId\) \|\| isHostOf\(request\.resource\.data\.eventId\)\)/, 'judges for THAT event, or hosts of it');
-  assert.deepEqual(allow(b, 'update'), ['isAdmin()']); assert.deepEqual(allow(b, 'delete'), ['isAdmin()']);
+  assert.deepEqual(allow(b, 'update'), ['isAdmin()']); assert.deepEqual(allow(b, 'delete'), ['isAdmin() || isHostOf(resource.data.eventId)']); assert.ok(!/isJudgeFor\(resource/.test(allow(b, 'update')[0] + allow(b, 'delete')[0]), 'judges can never replace or delete');
   assert.match(b, /scoreId == request\.resource\.data\.eventId \+ '_' \+ request\.resource\.data\.teamId \+ '_R' \+ string\(request\.resource\.data\.round\)/, 'doc id pins event+team+round → one score per match');
   assert.match(b, /judgeUid == request\.auth\.uid/, 'judge cannot forge another judge');
   assert.match(b, /gp in \[2, 3, 4\]/);
@@ -159,12 +159,12 @@ test('score upper bound leaves headroom above the true maximum', () => {
   const m = code.match(/v <= (\d+)/); assert.ok(m);
   assert.ok(+m[1] >= maxScores().total && +m[1] <= maxScores().total * 3, `${m[1]} vs ${maxScores().total}`);
 });
-test('practice: team-scoped — only that team’s coaches/members (and admins) read, create for own team, update never', () => {
+test('practice: team-scoped — only that team’s members (and admins) read, create, edit and delete', () => {
   const b = block('practice');
   assert.match(allow(b, 'read')[0], /isAdmin\(\) \|\| onTeam\(resource\.data\.teamId\)/);
   assert.match(allow(b, 'create')[0], /onTeam\(request\.resource\.data\.teamId\)/); assert.match(b, /request\.resource\.data\.uid == request\.auth\.uid/);
-  assert.match(allow(b, 'delete')[0], /coachOf\(resource\.data\.teamId\)/);
-  assert.deepEqual(allow(b, 'update'), ['false']);
+  assert.match(allow(b, 'delete')[0], /onTeam\(resource\.data\.teamId\)/);
+  assert.match(allow(b, 'update')[0], /onTeam\(resource\.data\.teamId\)[\s\S]*request\.resource\.data\.teamId == resource\.data\.teamId[\s\S]*uid == resource\.data\.uid/);
   assert.ok(!/myTeam\(/.test(code), 'team membership comes only from the roster / team-password docs, never from the access role label');
 });
 console.log(`\n${passed} rules checks passed`);

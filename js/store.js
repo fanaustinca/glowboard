@@ -22,6 +22,8 @@ export const scoringEvents = (user, events, eventHosts, eventJudges = []) => {
   const own = user.role === 'judge' ? (user.eventIds ? events.filter((e) => user.eventIds.includes(e.id)) : events) : [];
   return [...new Map([...own, ...hostedEvents(user, events, eventHosts), ...refereedEvents(user, events, eventJudges)].map((e) => [e.id, e])).values()];
 };
+// Only people who can actually score get the Judge page: a judge account, or anyone with at least one event to score.
+export const canScore = (user, scoreable) => Boolean(user) && (user.role === 'judge' || scoreable.length > 0);
 // Pseudo-roles: 'host' = host of ≥1 event, 'team' = on ≥1 team, 'signedin' = anyone signed in.
 export const hasRole = (u, r) => Boolean(u) && (r === 'host' ? u.host : r === 'team' ? Boolean(u.teams?.length) : r === 'signedin' ? true : u.role === r);
 // A person can be on many teams, with a role per team (coach only where the roster says so).
@@ -324,7 +326,9 @@ class DemoStore {
       else if (data.judgeUid !== u.uid || data.hasSignature !== true || ![2, 3, 4].includes(data.gp) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1000)) throw denied();
       if (!this.db.events[data.eventId] || !this.db.teams[data.teamId] || ![1, 2, 3].includes(data.round) || id !== scoreId(data.eventId, data.teamId, data.round)) throw denied();
     } else if (col === 'practice') {
-      if (!this.onTeam(u, data.teamId) || data.uid !== u.uid || ex || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1000)) throw denied();
+      if (!this.onTeam(u, data.teamId) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1000)) throw denied();
+      if (ex) { if (!this.onTeam(u, ex.teamId) || data.teamId !== ex.teamId || data.uid !== ex.uid || data.createdAt !== ex.createdAt) throw denied(); }
+      else if (data.uid !== u.uid) throw denied();
     } else throw denied();
     this.db[col][id] = { ...data, id };
     this.persist(); this.emit();
@@ -337,6 +341,8 @@ class DemoStore {
       const nameColors = Object.keys(fields).every((k) => ['name', 'colors'].includes(k));
       if (!(this.isAdmin(u) || (this.coachOf(u, id) && nameColors) || (this.isHost(u) && ex.createdBy === u.email && nameOnly))) throw denied();
       if (!this.validTeam({ ...ex, ...fields })) throw err('invalid', 'A team needs a number and a name (max 60 characters), and up to 3 valid colors.');
+    } else if (col === 'roster') {
+      if (!(this.isAdmin(u) && Object.keys(fields).every((k) => ['role', 'name'].includes(k)) && (!fields.role || ['member', 'coach'].includes(fields.role)))) throw denied();
     } else if (col === 'events') {
       if (!this.isAdmin(u)) { // hosts may only touch the team list and schedule of events they host
         if (!(this.hostOf(u, id) && Object.keys(fields).every((k) => ['teamIds', 'schedule'].includes(k)))) throw denied();
@@ -370,13 +376,14 @@ class DemoStore {
         || (u?.email && row?.email === u.email && row.role === 'member');
       if (!ok) throw denied();
     } else if (col === 'practice') {
-      if (!(this.isAdmin(u) || this.coachOf(u, row?.teamId) || (this.onTeam(u, row?.teamId) && row.uid === u.uid))) throw denied();
+      if (!(this.isAdmin(u) || this.onTeam(u, row?.teamId))) throw denied();
     } else if (col === 'teams') {
       if (!(this.isAdmin(u) || (this.isHost(u) && row?.createdBy === u.email))) throw denied();
     } else if (col === 'teamMembers') {
       if (!(this.isAdmin(u) || this.coachOf(u, row?.teamId) || (u && row?.uid === u.uid))) throw denied();
     } else if (col === 'eventJudges') this.need((x) => this.isAdmin(x) || this.hostOf(x, id));
-    else if (['events', 'eventHosts', 'scores'].includes(col)) this.need(this.isAdmin);
+    else if (col === 'scores') this.need((x) => this.isAdmin(x) || this.hostOf(x, row?.eventId));
+    else if (['events', 'eventHosts'].includes(col)) this.need(this.isAdmin);
     else throw denied();
     delete this.db[col][id];
     if (col === 'scores') delete this.db.signatures[id];
@@ -615,7 +622,13 @@ class FirebaseStore {
       b.set(fs.doc(this.fdb, 'scores', id), { ...rest, hasSignature: true });
       b.set(fs.doc(this.fdb, 'signatures', id), { signature, judgeUid: doc.judgeUid, createdAt: doc.createdAt });
       await b.commit();
-    } catch (e) { throw friendly(e); }
+    } catch (e) {
+      if (e.code !== 'permission-denied') throw friendly(e);
+      let exists = false; try { exists = (await fs.getDoc(fs.doc(this.fdb, 'scores', id))).exists(); } catch { /* ignore */ }
+      throw err('permission-denied', exists
+        ? 'This match already has an official score. The event’s host or an admin has to delete it before it can be scored again.'
+        : 'Firestore refused this score. This Google account must be an admin, a judge, a listed referee or a host of this event — and the latest firestore.rules must be published.');
+    }
   }
   async get(col, id) {
     const { fs } = this.sdk;
@@ -636,7 +649,8 @@ function friendly(e) {
     'auth/unauthorized-domain': 'This site’s domain isn’t authorized in Firebase → Authentication → Settings → Authorized domains.',
     'auth/operation-not-allowed': 'Google sign-in isn’t enabled yet (Firebase → Authentication → Sign-in method → Google).',
     'auth/too-many-requests': 'Too many attempts — wait a minute and try again.',
-    'permission-denied': 'You don’t have permission to do that (or that score already exists — ask an admin to correct it).',
+    'permission-denied': 'You don’t have permission to do that.',
+    'auth/admin-restricted-operation': 'Team-password sign-in isn’t switched on yet. In the Firebase console go to Authentication → Sign-in method and enable “Anonymous”, then try again.',
   };
   return err(c, map[c] || e.message || 'Something went wrong.');
 }

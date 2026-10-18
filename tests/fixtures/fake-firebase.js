@@ -32,7 +32,7 @@ const auths = new Map();
 export const getAuth = (app) => { if (!auths.has(app.name)) auths.set(app.name, { app, user: null, subs: new Set() }); return auths.get(app.name); };
 const setUser = (a, u) => { a.user = u; a.currentUser = u; fb.currentEmail = u?.email?.toLowerCase() || null; fb.currentUid = u?.uid || null; a.subs.forEach((f) => f(u)); };
 let anonN = 0;
-export const signInAnonymously = async (a) => { const u = { uid: 'anon-' + (++anonN), email: null, isAnonymous: true }; fb.log.push(['signInAnonymously']); setUser(a, u); return { user: u }; };
+export const signInAnonymously = async (a) => { if (fb.anonDisabled) throw err('auth/admin-restricted-operation'); const u = { uid: 'anon-' + (++anonN), email: null, isAnonymous: true }; fb.log.push(['signInAnonymously']); setUser(a, u); return { user: u }; };
 export const onAuthStateChanged = (a, cb) => { a.subs.add(cb); setTimeout(() => cb(a.user), 0); return () => a.subs.delete(cb); };
 export class GoogleAuthProvider {}
 export const signInWithPopup = async (a, provider) => {

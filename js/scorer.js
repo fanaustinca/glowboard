@@ -38,7 +38,7 @@ function missionHTML(m) {
   </section>`;
 }
 
-export function mountScorer(root, { mode, store, teams, scores, events = () => [], user, lockedTeamId = null }) {
+export function mountScorer(root, { mode, store, teams, scores, events = () => [], user, lockedTeamId = null, editRun = null, onDone = () => {} }) {
   const official = mode === 'official';
   const max = maxScores();
   const DRAFT = `gb-draft-${mode}`;
@@ -49,7 +49,8 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   let table = '';
   let busy = false;
 
-  try {
+  if (editRun) state = normalizeState(editRun.state);
+  else try {
     const d = JSON.parse(localStorage.getItem(DRAFT) || 'null');
     if (d) { state = normalizeState(d.state); if (!lockedTeamId) teamId = d.teamId || ''; eventId = d.eventId || ''; round = d.round || 1; table = d.table || ''; }
   } catch { /* ignore corrupt draft */ }
@@ -71,8 +72,8 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
         <label class="field"><span>Team</span><select id="sc-team" required><option value="">Select a team…</option>${teamOptions()}</select></label>
         <label class="field"><span>Match</span><select id="sc-round">${Array.from({ length: MATCHES_PER_TEAM }, (_, i) => `<option value="${i + 1}">Official match ${i + 1}</option>`).join('')}</select></label>
         <label class="field"><span>Table</span><input id="sc-table" inputmode="text" maxlength="12" placeholder="e.g. 3" autocomplete="off"></label>` : `
-        <p class="muted">Score your team’s practice runs with the official rules — the same form judges use. Runs are saved under your team’s name; only your coaches and members can see them, and they never appear on the public standings.</p>
-        <label class="field"><span>Note <small>(optional — what were you testing?)</small></span><input id="sc-note" maxlength="80" autocomplete="off" placeholder="e.g. new attachment for M05"></label>`}
+        <p class="muted">Score a practice run with the official rules.</p>
+        <label class="field"><span>Note <small>(optional — what were you testing?)</small></span><input id="sc-note" maxlength="80" autocomplete="off" placeholder="e.g. new attachment for M05" value="${esc(editRun?.note || '')}"></label>`}
       </div>
       <div id="sc-status" class="status" hidden></div>
     </section>
@@ -114,7 +115,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     ${official ? `
     <section class="card sign" aria-labelledby="sg-h">
       <h2 id="sg-h">Team signature</h2>
-      <p class="muted">The referee documents the result with the team. When both agree, the score becomes official.</p>
+      <p class="muted">Team and referee sign to confirm the score.</p>
       <label class="field"><span>Team initials</span><input id="sc-initials" maxlength="6" autocomplete="off" autocapitalize="characters" placeholder="e.g. RR"></label>
       <div class="field"><span>Sign below</span>
         <div class="sigwrap"><canvas id="sc-sig" aria-label="Team signature pad. Draw with a finger, stylus or mouse."></canvas><span class="sighint" id="sc-sighint">Sign here</span></div>
@@ -124,8 +125,8 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
 
     <div class="actions">
       <div id="sc-error" class="error" role="alert" hidden></div>
-      <button type="button" class="btn primary big" id="sc-submit">${official ? 'Submit official score' : 'Save practice run'}</button>
-      <button type="button" class="btn ghost" id="sc-reset">Reset form</button>
+      <button type="button" class="btn primary big" id="sc-submit">${official ? 'Submit official score' : editRun ? 'Save changes' : 'Save practice run'}</button>
+      ${editRun ? '<button type="button" class="btn ghost" id="sc-cancel">Cancel</button>' : '<button type="button" class="btn ghost" id="sc-reset">Reset form</button>'}
     </div>
   </div>`;
 
@@ -136,7 +137,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   // ---------- state helpers ----------
   const fieldDef = (mid, k) => MISSIONS.find((m) => m.id === mid).fields.find((f) => f.key === k);
   function mutate(fn) { fn(state); sync(); saveDraft(); }
-  function saveDraft() { try { localStorage.setItem(DRAFT, JSON.stringify({ state, teamId, eventId, round, table })); } catch { /* ignore */ } }
+  function saveDraft() { if (editRun) return; try { localStorage.setItem(DRAFT, JSON.stringify({ state, teamId, eventId, round, table })); } catch { /* ignore */ } }
 
   // ---------- render sync ----------
   function sync() {
@@ -186,6 +187,16 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     updateStatus();
   }
 
+  // Table comes from the event's saved match schedule for this team + round (still editable by the referee).
+  function scheduledTable() {
+    const row = (curEvent()?.schedule?.rows || []).find((r) => r.teamId === teamId && r.round === round);
+    return row ? String(row.table) : '';
+  }
+  function autoTable() {
+    if (!official || !teamId) return;
+    const t = scheduledTable(); if (!t) return;
+    table = t; $('#sc-table').value = t; saveDraft();
+  }
   function scoredRounds(id) { return new Set(scores().filter((s) => s.teamId === id && s.eventId === eventId).map((s) => s.round)); }
   function updateStatus() {
     if (!official) return;
@@ -202,7 +213,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     }
     const st = $('#sc-status');
     if (teamId && done.size >= MATCHES_PER_TEAM && user().role !== 'admin') {
-      st.hidden = false; st.className = 'status warn'; st.textContent = 'All three official matches are already scored for this team. An admin can correct a score.';
+      st.hidden = false; st.className = 'status warn'; st.textContent = 'All three official matches are already scored for this team. A host or admin can delete it so it can be scored again.';
     } else if (teamId && done.has(round)) {
       st.hidden = false; st.className = 'status warn'; st.textContent = 'This match already has an official score — submitting will overwrite it (admin only).';
     } else { st.hidden = true; }
@@ -229,13 +240,13 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     $('#sc-event').value = eventId;
     $('#sc-team').innerHTML = `<option value="">Select a team…</option>${teamOptions()}`;
     if (!teamOptions().includes(`value="${teamId}"`)) teamId = '';
-    $('#sc-event').addEventListener('change', (e) => { eventId = e.target.value; teamId = ''; $('#sc-team').innerHTML = `<option value="">Select a team…</option>${teamOptions()}`; saveDraft(); updateStatus(); });
+    $('#sc-event').addEventListener('change', (e) => { eventId = e.target.value; teamId = ''; table = ''; $('#sc-table').value = ''; $('#sc-team').innerHTML = `<option value="">Select a team…</option>${teamOptions()}`; saveDraft(); updateStatus(); });
     $('#sc-team').value = teamId; $('#sc-round').value = String(round); $('#sc-table').value = table;
     $('#sc-team').addEventListener('change', (e) => { teamId = e.target.value;
       const free = [1, 2, 3].find((r) => !scoredRounds(teamId).has(r));
       if (free) { round = free; $('#sc-round').value = String(free); }
-      saveDraft(); updateStatus(); });
-    $('#sc-round').addEventListener('change', (e) => { round = +e.target.value; saveDraft(); updateStatus(); });
+      autoTable(); saveDraft(); updateStatus(); });
+    $('#sc-round').addEventListener('change', (e) => { round = +e.target.value; autoTable(); saveDraft(); updateStatus(); });
     $('#sc-table').addEventListener('input', (e) => { table = e.target.value; saveDraft(); });
     $('#sc-sigclear').addEventListener('click', () => pad.clear());
     const onResize = () => pad.resize();
@@ -256,7 +267,8 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     saveDraft(); sync(); showError('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
-  $('#sc-reset').addEventListener('click', () => { if (confirm('Clear everything entered so far?')) reset(true); });
+  $('#sc-cancel')?.addEventListener('click', () => onDone());
+  $('#sc-reset')?.addEventListener('click', () => { if (confirm('Clear everything entered so far?')) reset(true); });
 
   $('#sc-submit').addEventListener('click', async () => {
     if (busy) return;
@@ -283,8 +295,13 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
           judgeUid: u.uid, judgeName: u.name, table: table.trim(), createdAt: Date.now(),
         }, pad.toDataURL());
         toast(`Submitted: ${team.name} — match ${round} — ${res.total} pts`, 'ok');
-        round = 1; $('#sc-round').value = '1';
+        round = 1; $('#sc-round').value = '1'; table = ''; $('#sc-table').value = '';
         reset(false);
+      } else if (editRun) {
+        const { id, ...rest } = editRun;
+        await store.put('practice', id, { ...rest, note: ($('#sc-note')?.value || '').trim(), total: res.total, gp: res.gp, state: res.state, result: slim(res), editedAt: Date.now(), editedBy: u.name });
+        toast(`Practice run updated: ${res.total} pts`, 'ok');
+        onDone();
       } else {
         const id = store.newId('p');
         await store.put('practice', id, {
@@ -293,6 +310,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
         toast(`Practice run saved: ${res.total} pts`, 'ok');
         if ($('#sc-note')) $('#sc-note').value = '';
         reset(true);
+        onDone();
       }
     } catch (e) { showError(e.message || 'Could not save.'); } finally { busy = false; $('#sc-submit').disabled = false; }
   });
@@ -305,6 +323,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
         const sel = $('#sc-team'); const cur = sel.value; sel.innerHTML = `<option value="">Select a team…</option>${teamOptions()}`; sel.value = cur || teamId;
       }
       updateStatus();
+      if (teamId && !table.trim()) autoTable(); // schedule may have been published after the team was picked
     },
     destroy() { root._cleanup?.(); },
   };

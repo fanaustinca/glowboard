@@ -1,6 +1,6 @@
 import { createStore } from './store.js';
-import { dashboardView, loginView, judgeView, practiceView, statsView, teamView, adminView, scheduleView, eventView, promptDefaultPasswords } from './views.js';
-import { hasRole, scoringEvents, ROLE_LABEL } from './store.js';
+import { dashboardView, loginView, judgeView, teamView, adminView, scheduleView, eventView, promptDefaultPasswords } from './views.js';
+import { hasRole, scoringEvents, canScore, ROLE_LABEL } from './store.js';
 import { esc, toast } from './ui.js';
 import { SEASON } from './missions.js';
 
@@ -9,17 +9,18 @@ import { SEASON } from './missions.js';
 const ROUTES = {
   '': { view: dashboardView, label: 'Standings', short: 'Scores', icon: '🏆', roles: null, nav: true },
   schedule: { view: scheduleView, label: 'Schedule', icon: '🗓️', roles: null, nav: true },
-  judge: { view: judgeView, label: 'Judge', icon: '📝', roles: ['judge', 'admin', 'host', 'referee'], nav: true },
-  practice: { view: practiceView, label: 'Practice', icon: '🎯', roles: ['team'], nav: true },
-  stats: { view: statsView, label: 'Stats', icon: '📊', roles: ['team'], nav: true },
+  judge: { view: judgeView, label: 'Judge', icon: '📝', roles: ['scorer'], nav: true },
+  // practice / stats / analytics used to be separate pages: they now live inside the Teams page
+  practice: { view: teamView, label: 'Teams', roles: ['signedin'], nav: false },
+  stats: { view: teamView, label: 'Teams', roles: ['signedin'], nav: false },
+  analytics: { view: teamView, label: 'Teams', roles: ['signedin'], nav: false },
   team: { view: teamView, label: 'Teams', icon: '👥', roles: ['signedin'], nav: true },
   event: { view: eventView, label: 'Event', icon: '🎪', roles: ['host', 'admin'], nav: true },
   admin: { view: adminView, label: 'Admin', icon: '⚙️', roles: ['admin'], nav: true },
   login: { view: loginView, label: 'Sign in', roles: null, nav: false },
 };
-// 'referee' = listed as a referee of at least one event (also a per-event modifier)
-const isReferee = (u) => Boolean(u) && data.eventJudges.some((j) => (j.emails || []).includes(u.email));
-const allowed = (r, u) => !r.roles || (u && r.roles.some((x) => (x === 'referee' ? isReferee(u) : hasRole(u, x))));
+const scorer = (u) => canScore(u, scoringEvents(u, data.events, data.eventHosts, data.eventJudges));
+const allowed = (r, u) => !r.roles || (u && r.roles.some((x) => (x === 'scorer' ? scorer(u) : hasRole(u, x))));
 const phone = matchMedia('(max-width: 719px)');
 const MAX_TABS = 5; // bottom tabs on a phone; anything beyond goes under "More"
 

@@ -4,7 +4,9 @@
 // (set NODE_PATH to wherever those packages are installed if node can't resolve them)
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
 import { readFileSync } from 'node:fs';
-import { setDoc, getDoc, getDocs, updateDoc, deleteDoc, doc, collection, query, where } from 'firebase/firestore';
+import { setDoc, getDoc, getDocs, updateDoc, deleteDoc, doc, collection, query, where, writeBatch } from 'firebase/firestore';
+import { scoreAll, defaultState } from '../js/scoring.js';
+import { slim } from '../js/store.js';
 
 const emu = (process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8089').split(':');
 const env = await initializeTestEnvironment({ projectId: 'demo-glow', firestore: { rules: readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8'), host: emu[0], port: +emu[1] } });
@@ -44,8 +46,9 @@ await env.withSecurityRulesDisabled(async (c) => {
   await w('teamSecrets/t7', { password: '777777', updatedBy: 'host@x.com', updatedAt: 1 });
   await w('teams/t7', { number: 7, name: 'Seven', createdBy: 'host@x.com' });
   await w('teams/t8', { number: 8, name: 'Eight', createdBy: 'host2@x.com' });
-  await w('practice/p1', { uid: 'u-coach', teamId: 't1', total: 100 });
-  await w('practice/p2', { uid: 'u-coach2', teamId: 't2', total: 90 });
+  await w('practice/p1', { uid: 'u-coach', teamId: 't1', total: 100, createdAt: 1 });
+  await w('practice/p2', { uid: 'u-coach2', teamId: 't2', total: 90, createdAt: 1 });
+  await w('practice/p3', { uid: 'u-pro', teamId: 't3', total: 60, createdAt: 1 });
   await w('signatures/ev1_t1_R1', { signature: 'data:x' });
   await w('eventJudges/ev1', { emails: ['coach2@x.com'] });
   await w('scores/ev1_t1_R1', { eventId: 'ev1', teamId: 't1', round: 1, total: 100, gp: 3, hasSignature: true, judgeUid: 'u-judge' });
@@ -132,7 +135,7 @@ await assertSucceeds(updateDoc(doc(pro, 'teams/t3'), { name: 'Gamma Ray' })); aw
 await assertSucceeds(setDoc(doc(pro, 'roster/t3__kid@gmail.com'), R('t3', 'kid@gmail.com', 'member', { addedBy: 'pro@x.com' }))); await assertFails(setDoc(doc(pro, 'roster/t1__kid@gmail.com'), R('t1', 'kid@gmail.com', 'member', { addedBy: 'pro@x.com' })));
 await assertSucceeds(setDoc(doc(pro, 'practice/ppro1'), { uid: 'u-pro', teamId: 't1', total: 40 })); await assertSucceeds(setDoc(doc(pro, 'practice/ppro3'), { uid: 'u-pro', teamId: 't3', total: 45 }));
 await assertSucceeds(getDocs(query(collection(pro, 'practice'), where('teamId', '==', 't1')))); await assertSucceeds(getDocs(query(collection(pro, 'practice'), where('teamId', '==', 't3')))); await assertFails(getDocs(query(collection(pro, 'practice'), where('teamId', '==', 't2'))));
-await assertFails(getDoc(doc(pro, 'teamSecrets/t1'))); await assertSucceeds(getDoc(doc(pro, 'teamSecrets/t3'))); await assertFails(deleteDoc(doc(pro, 'practice/p1'))); await assertSucceeds(deleteDoc(doc(pro, 'practice/ppro1')));
+await assertFails(getDoc(doc(pro, 'teamSecrets/t1'))); await assertSucceeds(getDoc(doc(pro, 'teamSecrets/t3'))); await assertFails(deleteDoc(doc(pro, 'practice/p2'))); await assertSucceeds(deleteDoc(doc(pro, 'practice/ppro1')));
 ok('a coach of t3 who is only a member of t1 gets coach powers on t3 and plain-member powers on t1 (practice yes; rename, password, people no)');
 await assertSucceeds(deleteDoc(doc(pro, 'roster/t1__pro@x.com'))); await assertFails(deleteDoc(doc(pro, 'roster/t3__pro@x.com'))); await assertFails(getDocs(query(collection(pro, 'practice'), where('teamId', '==', 't1'))));
 ok('a member can leave a team (and loses its data); a coach cannot walk out of their own team');
@@ -147,15 +150,17 @@ ok('coaches choose up to 3 hex team colors for their own team; invalid colors, e
 await assertSucceeds(setDoc(doc(coach, 'practice/pn'), { uid: 'u-coach', teamId: 't1', total: 80 })); await assertFails(setDoc(doc(coach, 'practice/pm'), { uid: 'u-coach', teamId: 't2', total: 80 }));
 await assertFails(setDoc(doc(coach, 'practice/pm'), { uid: 'someone', teamId: 't1', total: 80 })); await assertFails(setDoc(doc(coach, 'practice/pm'), { uid: 'u-coach', teamId: 't1', total: 9999 }));
 await assertSucceeds(getDocs(query(collection(coach, 'practice'), where('teamId', '==', 't1')))); await assertFails(getDocs(query(collection(coach, 'practice'), where('teamId', '==', 't2')))); await assertFails(getDocs(collection(coach, 'practice')));
-await assertSucceeds(deleteDoc(doc(coach, 'practice/pn'))); await assertFails(deleteDoc(doc(coach, 'practice/p2'))); await assertFails(updateDoc(doc(coach, 'practice/p1'), { total: 1 }));
-ok('practice runs are private to the team: coach can add/read/delete their own team’s, never another team’s; no edits');
+await assertSucceeds(deleteDoc(doc(coach, 'practice/pn'))); await assertFails(deleteDoc(doc(coach, 'practice/p2'))); await assertSucceeds(updateDoc(doc(coach, 'practice/p1'), { total: 101, note: 'edited' })); await assertFails(updateDoc(doc(coach, 'practice/p2'), { total: 1 }));
+await assertFails(updateDoc(doc(coach, 'practice/p1'), { teamId: 't2' })); await assertFails(updateDoc(doc(coach, 'practice/p1'), { uid: 'u-mem' })); await assertFails(updateDoc(doc(coach, 'practice/p1'), { createdAt: 2 })); await assertFails(updateDoc(doc(coach, 'practice/p1'), { total: 5000 }));
+ok('practice runs are private to the team: coach can add/read/edit/delete their own team’s, never another team’s; edits cannot move a run or fake its owner/date');
 // member
 await assertSucceeds(setDoc(doc(mem, 'practice/pmem'), { uid: 'u-mem', teamId: 't1', total: 70 })); await assertSucceeds(getDocs(query(collection(mem, 'practice'), where('teamId', '==', 't1'))));
-await assertSucceeds(deleteDoc(doc(mem, 'practice/pmem'))); await assertFails(deleteDoc(doc(mem, 'practice/p1')));
+await assertSucceeds(updateDoc(doc(mem, 'practice/p1'), { note: 'member edit' })); await assertFails(updateDoc(doc(mem, 'practice/p2'), { note: 'x' }));
+await assertSucceeds(setDoc(doc(coach, 'practice/pcr'), { uid: 'u-coach', teamId: 't1', total: 10, createdAt: 5 })); await assertSucceeds(deleteDoc(doc(mem, 'practice/pcr'))); await assertSucceeds(deleteDoc(doc(mem, 'practice/pmem'))); await assertFails(deleteDoc(doc(mem, 'practice/p2')));
 await assertFails(updateDoc(doc(mem, 'teams/t1'), { name: 'x' })); await assertFails(setDoc(doc(mem, 'access/friend@gmail.com'), { role: 'member', teamId: 't1', addedBy: 'mem@x.com', addedAt: 1 }));
 await assertFails(getDocs(collection(mem, 'access'))); await assertSucceeds(getDoc(doc(mem, 'access/mem@x.com'))); await assertFails(getDoc(doc(mem, 'access/coach@x.com')));
 await assertFails(setDoc(doc(mem, 'scores/ev1_t1_R2'), score({ teamId: 't1', round: 2, judgeUid: 'u-mem' })));
-ok('team member: practice for own team (delete own runs only); cannot rename, add people, or score officially');
+ok('team member: practice for own team (edit and delete any of the team’s runs, never another team’s); cannot rename, add people, or score officially');
 await assertSucceeds(getDocs(query(collection(coach2, 'practice'), where('teamId', '==', 't2')))); await assertFails(getDoc(doc(coach2, 'practice/p1'))); ok('other teams can’t read this team’s runs');
 // host (per-event layer)
 await assertSucceeds(setDoc(doc(admin, 'access/newhost@gmail.com'), { role: 'host', addedBy: 'admin@x.com' })); await assertSucceeds(setDoc(doc(admin, 'eventHosts/ev3'), { emails: ['newhost@gmail.com'] }));
@@ -178,8 +183,10 @@ await assertFails(updateDoc(doc(host, 'events/ev1'), { name: 'Renamed' })); awai
 await assertFails(updateDoc(doc(host, 'events/ev2'), { teamIds: ['t1'] })); await assertFails(updateDoc(doc(host2, 'events/ev1'), { schedule: sched })); await assertFails(setDoc(doc(host, 'events/ev9'), { name: 'mine' })); await assertFails(deleteDoc(doc(host, 'events/ev1')));
 ok('host edits ONLY teamIds + schedule, ONLY on events they host; cannot create/rename/delete events');
 await assertSucceeds(setDoc(doc(host, 'scores/ev1_t2_R2'), score({ round: 2, judgeUid: 'u-host' }))); await assertSucceeds(setDoc(doc(host, 'signatures/ev1_t2_R2'), { signature: 'data:z' }));
-await assertFails(setDoc(doc(host, 'scores/ev2_t2_R1'), score({ eventId: 'ev2', judgeUid: 'u-host' }))); await assertFails(setDoc(doc(host, 'scores/ev1_t2_R2'), score({ round: 2, total: 1, judgeUid: 'u-host' }))); await assertFails(deleteDoc(doc(host, 'scores/ev1_t1_R1')));
-ok('host can enter official scores for their own events only (create-once), never edit or delete');
+await assertFails(setDoc(doc(host, 'scores/ev2_t2_R1'), score({ eventId: 'ev2', judgeUid: 'u-host' }))); await assertFails(setDoc(doc(host, 'scores/ev1_t2_R2'), score({ round: 2, total: 1, judgeUid: 'u-host' })));
+await assertFails(updateDoc(doc(host, 'scores/ev1_t2_R2'), { total: 1 })); await assertFails(deleteDoc(doc(host2, 'scores/ev1_t2_R2'))); await assertFails(deleteDoc(doc(judge, 'scores/ev1_t2_R2'))); await assertFails(deleteDoc(doc(coach, 'scores/ev1_t2_R2')));
+await assertSucceeds(deleteDoc(doc(host, 'signatures/ev1_t2_R2'))); await assertSucceeds(deleteDoc(doc(host, 'scores/ev1_t2_R2'))); await assertFails(deleteDoc(doc(host2, 'signatures/ev1_t1_R1')));
+ok('host can enter official scores for their own events only (create-once), never edit; the host (not a judge or another event’s host) can delete a score + its signature so it can be re-scored');
 await assertFails(getDocs(collection(host, 'practice'))); await assertFails(getDocs(collection(host, 'access'))); await assertSucceeds(getDoc(doc(host, 'access/host@x.com')));
 ok('host has no access to practice runs or the access list');
 await assertSucceeds(updateDoc(doc(admin, 'events/ev1'), { name: 'Regional 2026', live: true })); await assertSucceeds(updateDoc(doc(admin, 'teams/t7'), { name: 'Admin edit', number: 7 })); ok('admin still controls everything');
@@ -235,7 +242,7 @@ ok('joining with the team password needs the right password for that team, under
 await assertSucceeds(setDoc(doc(anon1, 'teamMembers/anon-1_t2'), TM('anon-1', 't2', '654321')));
 await assertSucceeds(setDoc(doc(anon1, 'practice/pa1'), { uid: 'anon-1', teamId: 't1', by: 'Sam', total: 90 })); await assertSucceeds(setDoc(doc(anon1, 'practice/pa2'), { uid: 'anon-1', teamId: 't2', total: 90 })); await assertFails(setDoc(doc(anon1, 'practice/pa3'), { uid: 'someone', teamId: 't1', total: 90 }));
 await assertSucceeds(getDocs(query(collection(anon1, 'practice'), where('teamId', '==', 't1')))); await assertSucceeds(getDocs(query(collection(anon1, 'practice'), where('teamId', '==', 't2')))); await assertFails(getDocs(query(collection(anon1, 'practice'), where('teamId', '==', 't3')))); await assertFails(getDocs(collection(anon1, 'practice')));
-await assertSucceeds(deleteDoc(doc(anon1, 'practice/pa2'))); await assertFails(deleteDoc(doc(anon1, 'practice/p1'))); await assertSucceeds(getDocs(collection(anon1, 'teams'))); await assertSucceeds(getDocs(collection(anon1, 'scores')));
+await assertSucceeds(deleteDoc(doc(anon1, 'practice/pa2'))); await assertSucceeds(updateDoc(doc(anon1, 'practice/p1'), { note: 'anon edit' })); await assertFails(deleteDoc(doc(anon1, 'practice/p3'))); await assertFails(updateDoc(doc(anon1, 'practice/p3'), { note: 'x' })); await assertSucceeds(getDocs(collection(anon1, 'teams'))); await assertSucceeds(getDocs(collection(anon1, 'scores')));
 await assertSucceeds(getDocs(query(collection(anon1, 'teamMembers'), where('uid', '==', 'anon-1')))); await assertFails(getDocs(query(collection(anon1, 'teamMembers'), where('uid', '==', 'anon-2'))));
 ok('one anonymous visitor can be on several teams by password and gets exactly member powers on each (practice + stats) plus the public data');
 await assertFails(setDoc(doc(anon1, 'scores/ev1_t1_R2'), score({ teamId: 't1', round: 2, judgeUid: 'anon-1' }))); await assertFails(setDoc(doc(anon1, 'access/x@gmail.com'), { role: 'admin' })); await assertFails(setDoc(doc(anon1, 'teams/t99'), { number: 99, name: 'x', createdBy: 'a' })); await assertFails(updateDoc(doc(anon1, 'teams/t1'), { name: 'Hijack' })); await assertFails(updateDoc(doc(anon1, 'teams/t1'), { colors: ['#112233'] }));
@@ -274,5 +281,26 @@ await assertFails(setDoc(doc(host, 'roster/t8__d2@gmail.com'), R('t8', 'd2@gmail
 ok('a host designates coaches (new accounts, or existing ones such as a pro coach with several teams) for teams they created only — never for others’ teams, never plain members');
 await assertSucceeds(updateDoc(doc(pro, 'teams/t7'), { name: 'Seven (by pro)' })); await assertSucceeds(setDoc(doc(pro, 'practice/ppro7'), { uid: 'u-pro', teamId: 't7', total: 12 }));
 ok('the pro coach now coaches t3 and t7 at once');
+// ---- exactly what the app sends when a judge submits: score + signature in ONE batch ----
+{
+  const res = scoreAll(defaultState());
+  const payload = (eventId, teamId, round, uid) => ({ eventId, eventName: 'Regional', teamId, number: +teamId.slice(1), name: 'Team', round, total: res.total, gp: res.gp, state: res.state, result: slim(res), initials: 'AB', judgeUid: uid, judgeName: 'Jo', table: '3', createdAt: Date.now(), hasSignature: true });
+  const sig = 'data:image/png;base64,' + 'A'.repeat(150000);
+  const submit = (db, eventId, teamId, round, uid, signature = sig) => { const id = `${eventId}_${teamId}_R${round}`; const b = writeBatch(db); b.set(doc(db, 'scores', id), payload(eventId, teamId, round, uid)); b.set(doc(db, 'signatures', id), { signature, judgeUid: uid, createdAt: Date.now() }); return b.commit(); };
+  const can = async (label, p) => { try { await assertSucceeds(p); } catch (e) { console.log('SHOULD WORK BUT FAILED: ' + label); throw e; } };
+  const cannot = async (label, p) => { try { await assertFails(p); } catch (e) { console.log('SHOULD FAIL BUT WORKED: ' + label); throw e; } };
+  await can('unscoped judge, event without referee list', submit(judge, 'ev2', 't3', 1, 'u-judge'));
+  await cannot('judge re-submits same match', submit(judge, 'ev2', 't3', 1, 'u-judge'));
+  await can('event-limited judge on own event', submit(scoped, 'ev2', 't2', 3, 'u-sc')); await cannot('event-limited judge on other event', submit(scoped, 'ev1', 't2', 3, 'u-sc'));
+  await can('host of ev1', submit(host, 'ev1', 't7', 1, 'u-host')); await cannot('host of another event', submit(host2, 'ev1', 't7', 2, 'u-host2'));
+  await can('coach listed as referee', submit(coach2, 'ev1', 't8', 1, 'u-coach2'));
+  await cannot('member', submit(mem, 'ev1', 't1', 1, 'u-mem')); await cannot('anonymous team member', submit(anon1, 'ev1', 't1', 2, 'anon-1'));
+  await cannot('oversized signature', submit(judge, 'ev2', 't3', 2, 'u-judge', 'data:image/png;base64,' + 'A'.repeat(250000))); await cannot('forged judge uid', submit(judge, 'ev2', 't3', 2, 'someone-else'));
+  await can('admin', submit(admin, 'ev2', 't3', 3, 'u-admin'));
+  await cannot('judge deletes a score', deleteDoc(doc(judge, 'scores/ev2_t3_R1')));
+  await can('host deletes signature', deleteDoc(doc(host2, 'signatures/ev2_t3_R1'))); await can('host deletes score', deleteDoc(doc(host2, 'scores/ev2_t3_R1')));
+  await can('judge scores the match again after the host deleted it', submit(judge, 'ev2', 't3', 1, 'u-judge'));
+  ok('judges (unscoped, event-limited), hosts, listed referees and admins can submit the real app payload; members/anon/other events cannot; no replacing — a host deletes first');
+}
 await env.cleanup();
 console.log(`\n${passed} emulator checks passed`);

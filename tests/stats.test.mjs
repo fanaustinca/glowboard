@@ -1,6 +1,6 @@
 // The team-stats maths, checked on hand-built practice runs with known answers.
 import assert from 'node:assert/strict';
-import { computeStats, filterRuns } from '../js/stats.js';
+import { computeStats, filterRuns, computeSeries, seriesTables } from '../js/stats.js';
 import { defaultState, scoreAll, maxScores } from '../js/scoring.js';
 import { slim } from '../js/store.js';
 
@@ -69,5 +69,23 @@ test('range filter keeps the most recent N runs in time order; empty input is sa
   const f = filterRuns([D, A, C, B], 2); assert.deepEqual(f.map((r) => r.createdAt), [3, 4]);
   assert.equal(filterRuns([D, A], 'all').length, 2);
   const e = computeStats([]); assert.equal(e.overall.n, 0); assert.equal(e.overall.best, null); assert.equal(e.mostReliable.length, 0);
+});
+test('over-time series: deltas, rolling avg, best-so-far, mission rates', () => {
+  const sr = computeSeries(runs, 2);
+  assert.equal(sr.n, 4);
+  assert.deepEqual(sr.rows.map((r) => r.delta), [0, ...runs.slice(1).map((r, i) => r.total - runs[i].total)]);
+  assert.equal(sr.rows[3].rolling, (runs[2].total + runs[3].total) / 2);
+  assert.deepEqual(sr.rows.map((r) => r.best), runs.map((_, i) => Math.max(...runs.slice(0, i + 1).map((x) => x.total))));
+  const m8 = sr.per.find((m) => m.id === 'm08');
+  assert.deepEqual(m8.pts, runs.map((r) => r.result.missions.find((x) => x.id === 'm08').points));
+  assert.ok(m8.full.every((v) => v === 0 || v === 100) && m8.rollFull.length === 4);
+  assert.equal(sr.hist.reduce((a, b) => a + b.count, 0), 4, 'histogram holds every run');
+  assert.ok(Math.abs(sr.improvement.slope - (() => { const y = runs.map((r) => r.total); const mx = 1.5, my = y.reduce((a, b) => a + b) / 4; return y.reduce((a, v, i) => a + (i - mx) * (v - my), 0) / 5; })()) < 1e-9);
+});
+test('series tables: header + one row per run, rectangular, ready to paste', () => {
+  const t = seriesTables(computeSeries(runs, 3));
+  for (const [k, tab] of Object.entries(t)) assert.ok(tab.every((r) => r.length === tab[0].length), `${k} is rectangular`);
+  assert.equal(t.runs.length, 5); assert.equal(t.score.length, 5); assert.equal(t.heatmap[0].length, 16);
+  const e = computeSeries([], 5); assert.equal(e.n, 0); assert.equal(seriesTables(e).runs.length, 1);
 });
 console.log(`\n${passed} stats checks passed`);

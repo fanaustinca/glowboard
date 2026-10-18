@@ -5,6 +5,7 @@ Live score tracking for **FIRST® LEGO® League Challenge** events — currently
 * **Public dashboard** – anyone can see live standings, per-match scores and mission breakdowns. No login.
 * **Closed system, Google sign-in only.** Everyone needs a Google account on the access list. **Admins** create events, add coaches (any number per team), judges and other admins by gmail, and give people the **host** modifier for specific events. **Host** and **referee** are *per-event modifiers* — a coach or team member can be the host or a referee of one event and stays a coach everywhere else. Hosts add teams, pick which teams compete, generate the **match schedule**, add referees and enter scores for their event. **Coaches** add their own team members/parents/anyone. Coaches and members submit **practice runs** (the same scoring form judges use, saved under the team) and see **team stats**: averages, success rates per mission and per task, most/least reliable missions, trends. Standings are per event.
 * **Team password sign-in.** Every team gets a random 6-digit password when an admin/host creates it (with a designated coach). Team members enter team number + password — no Google account — and get *member* powers only (practice runs + team stats). Coaches can change the password (which signs everyone using the old one out), add more coaches or members by gmail, or just share the password. Elevated roles (coach, judge, host, admin) always require Google sign-in.
+* **One Teams page.** Tap a team → **Stats** (automatic), **Advanced** (charts over time + animated data table, all copyable to Google Sheets), **➕ Practice run** (add, or edit any run from the history) and, for coaches, **Manage**. The Judge tab only shows for people who can actually score.
 * **Judge scoring page** – team dropdown (number + name), every mission with the exact scoresheet rules, counters, live total, review table, Gracious Professionalism®, digital team signature.
 * Works on phones first (48 px touch targets, sticky live total, bottom nav) and scales up to desktop. Light/dark.
 * **Runs with zero setup in demo mode** (data in `localStorage`, seeded with 8 fake teams). Add your Firebase config to go live.
@@ -32,14 +33,16 @@ Try it: `npm run serve` then open the printed URL. Demo mode simulates Google si
 | `eventHosts/{eventId}` `{emails:[…]}` | admin, the listed hosts | admin |
 | `eventJudges/{eventId}` `{emails:[…]}` (event referees) | admin, that event's hosts, the listed referees | admin, that event's hosts |
 | `teams/{t<number>}` `{number,name,createdBy}` | everyone | admin; hosts create (and edit/delete the ones they created); a coach may change only `name` |
-| `scores/{eventId}_{teamId}_R{1-3}` | everyone | judge/admin/host-of-event **create once**; admin update/delete |
+| `scores/{eventId}_{teamId}_R{1-3}` | everyone | judge/referee/host-of-event **create once** (a judge can never replace or delete a score); admin update; **the event's host or an admin deletes** it so the match can be scored again |
 | `signatures/{same id}` | judge/host/admin only | judge/host/admin create; admin update/delete |
-| `practice/{id}` `{teamId,uid,…}` | that team's coaches/members, admin | that team create; coach/owner delete |
+| `practice/{id}` `{teamId,uid,…}` | that team's coaches/members, admin | anyone on that team creates, edits or deletes the team's runs |
 
 ### How team passwords are enforced
 There is no server: a team-password member is an anonymous Firebase session that writes `teamMembers/{uid}` containing the password it typed; the rules only accept it if it equals `teamSecrets/{teamId}.password`, and every team-scoped read/write re-checks that match — so changing the password locks old sessions out immediately. A 6-digit code can be brute-forced given enough attempts, and only guards *practice data*; coaches can pick a longer password (up to 64 characters).
 
 ## Troubleshooting sign-in
+* **Team-password sign-in says “Anonymous … switch on”** (raw code `auth/admin-restricted-operation`) – Firebase console → Authentication → Sign-in method → enable **Anonymous**.
+* **After updating the app, republish `firestore.rules`** (Firestore → Rules → paste → Publish). The site and the rules ship separately; delete/edit buttons are refused until the new rules are live.
 * **“… isn't on the access list”** – there is no Firestore document `access/<your lowercase gmail>`. The message shows the exact ID to use. First admin: collection `access`, Document ID = your gmail in lowercase, string field `role` = `admin`.
 * **“Firestore blocked reading the access list”** – the rules aren't published yet. Paste `firestore.rules` into Firestore → Rules → Publish.
 * **Team sign-in says “don't match” for a correct password** – turn on **Anonymous** sign-in (Authentication → Sign-in method) and publish the latest rules.
@@ -49,19 +52,7 @@ There is no server: a team-password member is an anonymous Firebase session that
 Hosts (and admins) open **Event**, choose rounds, number of tables, first-match time, minutes per match and the break between rounds, then **Generate**. Every team plays every round, teams rotate tables, and with 3+ slots per round nobody plays back-to-back (`js/schedule.js`, property-tested). **Save** publishes it on the public **Schedule** page (with team search).
 
 ### Google Sheets export
-Works today without setup: **Download CSV**, or **Copy for Google Sheets** and paste. For one-click *Send to Google Sheets* later: create a Sheet → Extensions → Apps Script, paste
-
-```js
-function doPost(e) {
-  const { sheetName, rows } = JSON.parse(e.postData.contents);
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
-  sh.clearContents();
-  sh.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
-  return ContentService.createTextOutput('ok');
-}
-```
-then Deploy → Web app (Execute as *me*, access *Anyone*) and put the `/exec` URL in `js/sheets-config.js`.
+**Download CSV** or **Copy for Google Sheets** and paste (Ctrl+V). The **Advanced** tab on a team's page can copy any chart's data, or everything at once, the same way.
 
 ## Scoring (and where it comes from)
 All rules live in **`js/missions.js`** (data) and **`js/scoring.js`** (pure engine), transcribed from the official 2026-27 scoresheet, Robot Game Rulebook and Challenge Updates (Oct 14 2026). Highlights implemented: equipment inspection (20), precision tokens table (0/10/15/25/35/50/50), per-mission bonuses that require their base condition, Mission 5 single-condition, Mission 7 bonuses (0-2, none without an opponent), Mission 15 single environmental bonus tied to the dock, Update 01 Lucky Leaves katydid rules, the **No Equipment Constraint** on M01/04/05/07/09/10/12/15, best-of-three ranking with 2nd/3rd best tie-breaks, GP (2/3/4) recorded but not added to the robot score.
