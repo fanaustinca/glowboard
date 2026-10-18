@@ -5,6 +5,7 @@ import { MISSIONS, MATCHES_PER_TEAM, SEASON } from './missions.js';
 import { mountScorer } from './scorer.js';
 import { ROLE_LABEL, isTeamSide, eventTeams, normEmail, EMAIL_RE, DEMO_ACCOUNTS, hostedEvents } from './store.js';
 import { generateSchedule, groupSchedule, scheduleTable, clampConfig, SCHEDULE_DEFAULTS, LIMITS } from './schedule.js';
+import { computeStats, filterRuns } from './stats.js';
 import { downloadCSV, copyForSheets, sendToSheets, sheetsConfigured } from './sheets.js';
 import { esc, toast, timeAgo, modal, csvCell, download } from './ui.js';
 
@@ -124,8 +125,8 @@ const gate = (root, msg, ctx) => { root.innerHTML = `<section class="card narrow
 // ───────────────────────────── Judge ─────────────────────────────
 export function judgeView(root, ctx) {
   const u = ctx.user();
-  if (!u) return gate(root, 'Judges, event hosts and admins sign in to enter official scores.', ctx);
-  if (!['judge', 'admin', 'host'].includes(u.role)) { root.innerHTML = '<section class="card narrow"><h1>Judges only</h1><p class="muted">Your account can’t enter official scores. Teams can use the Practice page.</p></section>'; return {}; }
+  if (!u) return gate(root, 'Referees, event hosts and admins sign in to enter official scores.', ctx);
+  if (!(['judge', 'admin'].includes(u.role) || u.host || ctx.scoringEvents().length)) { root.innerHTML = '<section class="card narrow"><h1>Referees only</h1><p class="muted">Your account can’t enter official scores. Teams can use the Practice page.</p></section>'; return {}; }
   root.innerHTML = '<h1 class="page-title">Official scoring</h1><div id="sc"></div>';
   const sc = mountScorer(root.querySelector('#sc'), { mode: 'official', store: ctx.store, teams: ctx.teams, scores: ctx.scores, events: ctx.scoringEvents, user: ctx.user });
   return { update: () => sc.refresh(), destroy: () => sc.destroy() };
@@ -148,8 +149,10 @@ export function statsView(root, ctx) {
   if (!u) return gate(root, 'Coaches and team members sign in to see their team’s practice stats.', ctx);
   if (!isTeamSide(u.role)) { root.innerHTML = '<section class="card narrow"><h1>Teams only</h1><p class="muted">Stats are shown for a team’s coaches and members.</p></section>'; return {}; }
   root.innerHTML = '<h1 class="page-title">Team stats</h1><div id="st"></div>';
-  let runs = [];
-  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+  let runs = [], range = 'all';
+  const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
+  const r0 = (n) => Math.round(n);
+  const mname = (m) => `M${String(m.num).padStart(2, '0')} ${m.name}`;
 
   function spark(vals) {
     if (vals.length < 2) return '<p class="muted small">Save two or more practice runs to see your trend.</p>';
@@ -159,45 +162,60 @@ export function statsView(root, ctx) {
       <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" points="${pts.map((p) => p.join(',')).join(' ')}"/>
       ${pts.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="3.5" fill="var(--accent)"><title>Run ${i + 1}: ${vals[i]}</title></circle>`).join('')}</svg>`;
   }
+  const bar = (p, cls = '') => `<span class="bt ${cls}"><i style="width:${Math.max(0, Math.min(100, p))}%"></i></span>`;
+  const rel = (list, empty, cls) => (list.length ? `<ol class="rel">${list.map((m) => `<li><span class="bl"><b>${esc(mname(m))}</b><small>${r0(m.fullRate)}% full marks · avg ${f1(m.avg)} / ${m.max}</small></span>${bar(m.fullRate, cls)}<span class="bv">${r0(m.fullRate)}%</span></li>`).join('')}</ol>` : `<p class="muted small">${empty}</p>`);
 
   function render() {
     const el = root.querySelector('#st');
-    const sorted = runs.slice().sort((a, b) => a.createdAt - b.createdAt);
-    const totals = sorted.map((r) => r.total);
-    const official = ctx.scores().filter((s) => s.teamId === u.teamId).sort((a, b) => a.round - b.round);
-    const avg = totals.length ? Math.round(totals.reduce((a, b) => a + b, 0) / totals.length) : 0;
-    const per = MISSIONS.map((m) => {
-      const pts = sorted.map((r) => r.result?.missions?.find((x) => x.id === m.id)?.points ?? 0);
-      const a = pts.length ? pts.reduce((x, y) => x + y, 0) / pts.length : 0;
-      const hit = pts.filter((p) => p >= max().perMission[m.id]).length;
-      return { m, avg: a, pct: pct(a, max().perMission[m.id]), hit, n: pts.length };
-    });
-    const weak = per.filter((p) => p.n).sort((a, b) => a.pct - b.pct).slice(0, 3);
+    const set = filterRuns(runs, range);
+    const st = computeStats(set);
+    const o = st.overall;
+    const official = ctx.scores().filter((x) => x.teamId === u.teamId).sort((a, b) => a.round - b.round);
+    if (!runs.length) { el.innerHTML = '<section class="card"><p class="empty">No practice runs saved yet — head to <a href="#/practice">Practice</a> and score a run. Everyone on your team shares these stats.</p></section>'; return; }
+    const trend = o.trend == null ? '' : `<small class="${o.trend >= 0 ? 'up' : 'down'}">${o.trend >= 0 ? '▲' : '▼'} ${Math.abs(r0(o.trend))} vs the 5 before</small>`;
     el.innerHTML = `
+      <div class="toolbar"><label class="field evsel"><span>Runs to analyse</span><select id="st-range">
+        ${[['all', 'All runs'], ['5', 'Last 5'], ['10', 'Last 10'], ['20', 'Last 20']].map(([v, l]) => `<option value="${v}" ${range === v ? 'selected' : ''}>${l}${v !== 'all' && runs.length < +v ? '' : ''}</option>`).join('')}</select></label>
+        <p class="muted small grow">Analysing <b>${o.n}</b> of ${runs.length} saved run${runs.length === 1 ? '' : 's'}, from the whole team.</p></div>
       <section class="kpis">
-        <div class="kpi"><span>Practice runs</span><b>${runs.length}</b></div>
-        <div class="kpi"><span>Best practice</span><b>${totals.length ? Math.max(...totals) : '—'}</b></div>
-        <div class="kpi"><span>Average</span><b>${totals.length ? avg : '—'}</b></div>
-        <div class="kpi"><span>Best official</span><b>${official.length ? Math.max(...official.map((s) => s.total)) : '—'}</b></div>
+        <div class="kpi"><span>Practice runs</span><b>${o.n}</b></div>
+        <div class="kpi"><span>Average</span><b>${r0(o.avg)}</b><small>${r0(o.avgPctOfMax)}% of ${o.max}</small></div>
+        <div class="kpi"><span>Best</span><b>${o.best}</b><small>worst ${o.worst}</small></div>
+        <div class="kpi"><span>Last 5 avg</span><b>${o.last5Avg == null ? '—' : r0(o.last5Avg)}</b>${trend}</div>
+        <div class="kpi"><span>Consistency</span><b>±${r0(o.std)}</b><small>median ${r0(o.median)}</small></div>
+        <div class="kpi"><span>Best official</span><b>${official.length ? Math.max(...official.map((x) => x.total)) : '—'}</b></div>
       </section>
       <div class="cols">
-        <section class="card"><h2>Score trend</h2>${spark(totals)}
-          ${official.length ? `<h3>Official matches</h3><ul class="chips">${official.map((s) => `<li>Match ${s.round}: <b>${s.total}</b></li>`).join('')}</ul>` : ''}</section>
-        <section class="card"><h2>Focus next</h2>${weak.length ? `<ul class="focus">${weak.map((w) => `<li><b>M${String(w.m.num).padStart(2, '0')} ${esc(w.m.name)}</b><small>avg ${w.avg.toFixed(1)} of ${max().perMission[w.m.id]} pts · full marks ${w.hit}/${w.n} runs</small></li>`).join('')}</ul>` : '<p class="muted">Save a practice run to see which missions to practise.</p>'}</section>
+        <section class="card"><h2>Score trend</h2>${spark(filterRuns(runs, range).map((r) => r.total))}
+          ${official.length ? `<h3>Official matches</h3><ul class="chips">${official.map((x) => `<li>Match ${x.round}: <b>${x.total}</b></li>`).join('')}</ul>` : ''}
+          <p class="muted small">Equipment inspection done in <b>${r0(st.equip.rate)}%</b> of runs · precision tokens left on average: <b>${f1(st.tokens.avgRemaining)}</b> of ${st.tokens.max} (${f1(st.tokens.avgPoints)} pts).</p></section>
+        <section class="card"><h2>Biggest points left on the table</h2>${st.pointsLeft.length ? `<ul class="focus">${st.pointsLeft.map((m) => `<li><b>${esc(mname(m))}</b><small>${f1(m.left)} pts per run on average</small></li>`).join('')}</ul>` : ''}</section>
       </div>
-      <section class="card"><h2>Average points by mission</h2>
-        <ul class="bars">${per.map((p) => `<li><span class="bl">M${String(p.m.num).padStart(2, '0')} ${esc(p.m.name)}</span><span class="bt"><i style="width:${p.pct}%"></i></span><span class="bv">${p.avg.toFixed(1)}<small>/${max().perMission[p.m.id]}</small></span></li>`).join('')}</ul></section>
-      <section class="card"><h2>Practice history</h2>${sorted.length ? `<ul class="history">${sorted.slice().reverse().map((r, i) => `
-        <li><button class="linkish" data-run="${esc(r.id)}"><b>${r.total}</b> pts <small>${new Date(r.createdAt).toLocaleString()}${r.by ? ` · ${esc(r.by)}` : ''}</small></button>
-        ${u.role === 'coach' || r.uid === u.uid ? `<button class="btn ghost small" data-del="${esc(r.id)}" aria-label="Delete run from ${new Date(r.createdAt).toLocaleString()}">Delete</button>` : ''}</li>`).join('')}</ul>` : '<p class="empty">No practice runs saved yet — head to Practice.</p>'}</section>`;
+      <div class="cols">
+        <section class="card"><h2>Most reliable missions</h2><p class="muted small">Full marks most often.</p>${rel(st.mostReliable, 'Nothing yet.', 'good')}</section>
+        <section class="card"><h2>Least reliable missions</h2><p class="muted small">Full marks least often — practise these first.</p>${rel(st.leastReliable, 'Nothing yet.', 'bad')}</section>
+      </div>
+      <div class="cols">
+        <section class="card"><h2>Never full marks</h2>${st.neverFull.length ? `<ul class="chips">${st.neverFull.map((m) => `<li>${esc(mname(m))} <small>avg ${r0(m.avgPct)}%</small></li>`).join('')}</ul>` : '<p class="muted small">Every mission has scored full marks at least once. 🎉</p>'}</section>
+        <section class="card"><h2>Most inconsistent</h2><p class="muted small">Scores swing a lot from run to run (needs 3+ runs).</p>${st.inconsistent.length ? `<ul class="focus">${st.inconsistent.map((m) => `<li><b>${esc(mname(m))}</b><small>±${f1(m.std)} pts · avg ${f1(m.avg)} / ${m.max}</small></li>`).join('')}</ul>` : '<p class="muted small">Not enough runs yet.</p>'}</section>
+      </div>
+      <section class="card"><h2>Weakest individual tasks</h2><p class="muted small">The single steps that succeed least often.</p>
+        <ul class="bars">${st.weakestTasks.map((t) => `<li><span class="bl">M${String(t.num).padStart(2, '0')} · ${esc(t.label)}</span>${bar(t.rate, 'bad')}<span class="bv">${r0(t.rate)}%</span></li>`).join('')}</ul></section>
+      <section class="card"><h2>Every mission</h2><p class="muted small">Success rate = runs with full marks. Tap a mission for its individual tasks.</p>
+        <div class="mlist">${st.missions.map((m) => `<details class="mrow"><summary><span class="bl"><b>${esc(mname(m))}</b><small>avg ${f1(m.avg)} / ${m.max} · scored in ${r0(m.scoredRate)}% of runs</small></span>${bar(m.fullRate, m.fullRate >= 70 ? 'good' : m.fullRate < 30 ? 'bad' : '')}<span class="bv">${r0(m.fullRate)}%<small> full</small></span></summary>
+          <ul class="bars sub">${m.tasks.map((t) => `<li><span class="bl">${esc(t.label)}${t.kind === 'count' ? `<small>avg ${f1(t.avg)} of ${t.max}</small>` : ''}</span>${bar(t.rate)}<span class="bv">${r0(t.rate)}%</span></li>`).join('')}</ul></details>`).join('')}</div></section>
+      <section class="card"><h2>Practice history</h2><ul class="history">${runs.slice().sort((a, b) => b.createdAt - a.createdAt).map((r) => `
+        <li><button class="linkish" data-run="${esc(r.id)}"><b>${r.total}</b> pts <small>${new Date(r.createdAt).toLocaleString()}${r.by ? ` · ${esc(r.by)}` : ''}${r.note ? ` · “${esc(r.note)}”` : ''}</small></button>
+        ${u.role === 'coach' || r.uid === u.uid ? `<button class="btn ghost small" data-del="${esc(r.id)}" aria-label="Delete run from ${new Date(r.createdAt).toLocaleString()}">Delete</button>` : ''}</li>`).join('')}</ul></section>`;
   }
+  root.addEventListener('change', (e) => { if (e.target.id === 'st-range') { range = e.target.value; render(); } });
   root.addEventListener('click', async (e) => {
     const d = e.target.closest('[data-del]'), v = e.target.closest('[data-run]');
     if (d && confirm('Delete this practice run?')) { try { await ctx.store.remove('practice', d.dataset.del); } catch (x) { toast(x.message, 'err'); } }
     if (v) {
       const r = runs.find((x) => x.id === v.dataset.run); if (!r) return;
       modal(`<table class="rv-table"><tbody><tr><td>Equipment inspection</td><td class="num">${r.result.equipment}</td></tr><tr><td>Precision tokens</td><td class="num">${r.result.tokens}</td></tr>
-        ${r.result.missions.map((m) => `<tr class="${m.points ? 'has' : ''}"><td>M${String(m.num).padStart(2, '0')} ${esc(m.name)}</td><td class="num">${m.points}</td></tr>`).join('')}</tbody><tfoot><tr><th>Total</th><th class="num">${r.total}</th></tr></tfoot></table>`, { title: 'Practice run' });
+        ${r.result.missions.map((m) => `<tr class="${m.points ? 'has' : ''}"><td>M${String(m.num).padStart(2, '0')} ${esc(m.name)}</td><td class="num">${m.points}</td></tr>`).join('')}</tbody><tfoot><tr><th>Total</th><th class="num">${r.total}</th></tr></tfoot></table>${r.note ? `<p class="muted small">Note: ${esc(r.note)}</p>` : ''}`, { title: 'Practice run' });
     }
   });
   const unsub = ctx.store.subscribe('practice', (r) => { runs = r; render(); });
@@ -305,10 +323,10 @@ export function adminView(root, ctx) {
     const grp = (role, title) => {
       const rows = people.filter((p) => p.role === role).sort((a, b) => (a.teamId || '').localeCompare(b.teamId || '') || a.id.localeCompare(b.id));
       if (!rows.length) return '';
-      return `<h3>${title} <small>(${rows.length})</small></h3><ul class="admin-list">${rows.map((p) => `<li><span><b>${esc(p.name || p.id.split('@')[0])}</b>${p.id === u.email ? ' <span class="badge">you</span>' : ''}<small class="block">${esc(p.id)}${p.teamId ? ` · ${esc(teamName(p.teamId))}` : ''}</small></span>
+      return `<h3>${title} <small>(${rows.length})</small></h3><ul class="admin-list">${rows.map((p) => `<li><span><b>${esc(p.name || p.id.split('@')[0])}</b>${p.id === u.email ? ' <span class="badge">you</span>' : ''}${p.host && p.role !== 'host' ? ' <span class="badge live-b">host</span>' : ''}${p.role === 'judge' && p.eventIds?.length ? ` <span class="badge">${p.eventIds.map((id) => esc(evName(id))).join(', ')}</span>` : ''}<small class="block">${esc(p.id)}${p.teamId ? ` · ${esc(teamName(p.teamId))}` : ''}</small></span>
         ${p.id === u.email ? '' : `<button class="btn ghost small danger" data-rmp="${esc(p.id)}" aria-label="Remove ${esc(p.id)}">Remove</button>`}</li>`).join('')}</ul>`;
     };
-    $('#a-users').innerHTML = grp('admin', 'Admins') + grp('judge', 'Judges') + grp('coach', 'Coaches') + grp('member', 'Team members') || '<p class="empty">Nobody listed.</p>';
+    $('#a-users').innerHTML = grp('admin', 'Admins') + grp('host', 'Event hosts') + grp('judge', 'Judges & referees') + grp('coach', 'Coaches') + grp('member', 'Team members') || '<p class="empty">Nobody listed.</p>';
     const sc = ctx.scores().slice().sort((a, b) => (a.eventId || '').localeCompare(b.eventId || '') || a.number - b.number || a.round - b.round);
     $('#a-scores').innerHTML = sc.map((s) => `<tr><td>${esc(evName(s.eventId))}</td><td>#${esc(s.number)} ${esc(s.name)}</td><td>${s.round}</td><td class="num"><b>${s.total}</b></td><td>${esc(s.judgeName || '')}</td>
       <td class="acts"><button class="btn ghost small" data-sig="${esc(s.id)}">Signature</button><button class="btn ghost small danger" data-delscore="${esc(s.id)}" aria-label="Delete score for ${esc(s.name)} match ${s.round}">Delete</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">No scores yet.</td></tr>';
@@ -320,7 +338,7 @@ export function adminView(root, ctx) {
     const dlg = modal('<div id="h-body"></div>', { title: `Hosts · ${ev.name}` });
     const emails = () => (ctx.eventHosts().find((h) => h.id === eventId)?.emails || []);
     const paint = () => {
-      dlg.querySelector('#h-body').innerHTML = `<p class="muted small">Hosts can add teams, choose which teams compete, generate the match schedule and enter scores — for this event only.</p>
+      dlg.querySelector('#h-body').innerHTML = `<p class="muted small">“Host” is a modifier for this event only, so a coach or judge can be a host too. Hosts add teams, choose which teams compete, generate the schedule, add referees and enter scores for this event.</p>
         <ul class="admin-list">${emails().map((m) => `<li><span>${esc(m)}</span><button class="btn ghost small danger" data-hrm="${esc(m)}" aria-label="Remove host ${esc(m)}">Remove</button></li>`).join('') || '<li class="empty">No hosts yet.</li>'}</ul>
         <form id="h-add" class="inline" novalidate><label class="field grow"><span>Host’s Google email</span><input id="h-email" type="email" inputmode="email" autocapitalize="none" autocomplete="off" required></label><button class="btn primary">Add host</button></form>
         <div id="h-err" class="error" role="alert" hidden></div>`;
@@ -333,8 +351,8 @@ export function adminView(root, ctx) {
         if (!EMAIL_RE.test(email)) return fail('Enter a valid Google email address.');
         if (emails().includes(email)) return fail('Already a host of this event.');
         const existing = people.find((p) => p.id === email);
-        if (existing && !['host', 'admin'].includes(existing.role)) return fail(`${email} is already a ${ROLE_LABEL[existing.role].toLowerCase()} — one role per person. Remove that first.`);
         if (!existing) await ctx.store.put('access', email, { role: 'host', name: '', addedBy: u.email, addedAt: Date.now() });
+        else if (existing.role !== 'admin' && existing.role !== 'host' && !existing.host) { const { id: _i, ...rest } = existing; await ctx.store.put('access', email, { ...rest, host: true }); }
         await ctx.store.put('eventHosts', eventId, { emails: [...emails(), email] });
         toast(`${email} is now a host`, 'ok'); paint();
       } catch (x) { fail(x.message); }
@@ -345,7 +363,9 @@ export function adminView(root, ctx) {
       try {
         await ctx.store.put('eventHosts', eventId, { emails: emails().filter((m) => m !== email) });
         const stillHosts = ctx.eventHosts().some((h) => h.id !== eventId && (h.emails || []).includes(email));
-        if (!stillHosts && people.find((p) => p.id === email)?.role === 'host') await ctx.store.remove('access', email);
+        const person = people.find((p) => p.id === email);
+        if (!stillHosts && person?.role === 'host') await ctx.store.remove('access', email);          // host-only person → no more access
+        else if (!stillHosts && person?.host) { const { id: _i, host: _h, ...rest } = person; await ctx.store.put('access', email, rest); } // coach/judge stays, loses the host flag
         paint();
       } catch (x) { fail(x.message); }
     });
@@ -470,10 +490,10 @@ export function scheduleView(root, ctx) {
 export function eventView(root, ctx) {
   const u = ctx.user();
   if (!u) return gate(root, 'Event hosts sign in to manage their event.', ctx);
-  if (!['host', 'admin'].includes(u.role)) { root.innerHTML = '<section class="card narrow"><h1>Hosts only</h1><p class="muted">Event pages are for event hosts and admins.</p></section>'; return {}; }
+  if (!(u.role === 'admin' || u.host)) { root.innerHTML = '<section class="card narrow"><h1>Hosts only</h1><p class="muted">Event pages are for event hosts and admins.</p></section>'; return {}; }
   root.innerHTML = '<h1 class="page-title">Event</h1><div id="ev"></div>';
   const host = root.querySelector('#ev');
-  let selId = null, picks = null, pickKey = '', draft = null, seed = 1, cfgIn = null;
+  let selId = null, picks = null, pickKey = '', draft = null, seed = 1, cfgIn = null, people = [], refs = [], refsFor = '';
   try { selId = localStorage.getItem(MANAGE_KEY); } catch { /* ignore */ }
   const run = async (fn) => { try { await fn(); } catch (x) { toast(x.message, 'err'); } };
   const mine = () => hostedEvents(u, ctx.events(), ctx.eventHosts()).sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0));
@@ -484,20 +504,27 @@ export function eventView(root, ctx) {
     if (!ev) { host.innerHTML = `<section class="card narrow"><h2>No events yet</h2><p class="muted">${u.role === 'admin' ? 'Create an event on the Admin page first.' : 'An admin needs to assign you to an event. Ask them to add your Google account under Events → Hosts.'}</p></section>`; return; }
     const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
     if (pickKey !== ev.id) { picks = new Set(ev.teamIds || []); pickKey = ev.id; draft = null; cfgIn = null; seed = 1; }
+    if (refsFor !== ev.id) { refsFor = ev.id; refs = []; setTimeout(loadRefs, 0); }
     const cfg = cfgIn || ev.schedule?.config || SCHEDULE_DEFAULTS;
     const shown = draft || ev.schedule || null;
     const evTeams = eventTeams(ev, teams);
     host.innerHTML = `
       ${list.length > 1 ? `<label class="field evsel"><span>Event</span><select id="e-sel">${list.map((e) => `<option value="${esc(e.id)}" ${e.id === ev.id ? 'selected' : ''}>${esc(e.name)}${e.live ? ' · live' : ''}</option>`).join('')}</select></label>` : `<h2 class="evtitle">${esc(ev.name)}</h2>`}
-      <section class="card"><h2>Teams at this event <small>(${evTeams.length}${ev.teamIds?.length ? '' : ' · all teams'})</small></h2>
+      <section class="card"><h2>Teams at this event <small id="e-teamcount">(${evTeams.length}${ev.teamIds?.length ? '' : ' · all teams'})</small></h2>
         <form id="e-team" class="inline" novalidate><label class="field"><span>Number <small>(required)</small></span><input id="e-tn" inputmode="numeric" pattern="[0-9]*" maxlength="6" required></label>
           <label class="field grow"><span>Team name <small>(required)</small></span><input id="e-tname" maxlength="60" required></label><button class="btn primary">Add team</button></form>
         <div id="e-terr" class="error" role="alert" hidden></div>
         <details class="bulk"><summary>Bulk add (paste “number, name” per line)</summary><textarea id="e-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers&#10;5530, Byte Me"></textarea><button class="btn ghost" id="e-bulkgo" type="button">Add all</button></details>
         <p class="muted small">Tick the teams competing here, then save. Leave all unticked to include every team.</p>
         <div class="row-actions"><button class="btn ghost small" id="e-all" type="button">Tick all</button><button class="btn ghost small" id="e-none" type="button">Clear</button></div>
-        <div class="checklist" id="e-checks">${teams.map((t) => `<label class="check"><input type="checkbox" data-tid="${esc(t.id)}" ${picks.has(t.id) ? 'checked' : ''}> <span><b>#${esc(t.number)}</b> ${esc(t.name)}</span></label>`).join('') || '<p class="empty">No teams yet — add one above.</p>'}</div>
+        <div class="checklist" id="e-checks">${checksHTML(teams)}</div>
         <button class="btn primary" id="e-saveteams" type="button">Save teams</button></section>
+      <section class="card"><h2>Referees &amp; judges</h2>
+        <p class="muted small">Anyone can referee this event — a coach, a team member, or someone new. Add their Google email: they can enter official scores for <b>this event only</b>, and keep any other role they have.</p>
+        <form id="e-ref" class="grid-user" novalidate><label class="field"><span>Google email</span><input id="r-email" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label>
+          <label class="field"><span>Name <small>(optional)</small></span><input id="r-name" maxlength="40"></label><button class="btn primary">Add referee</button></form>
+        <div id="r-err" class="error" role="alert" hidden></div>
+        <ul class="admin-list" id="e-reflist">${refsHTML()}</ul></section>
       <section class="card"><h2>Match schedule</h2>
         <p class="muted small">Auto-generates a schedule for the ${evTeams.length} team${evTeams.length === 1 ? '' : 's'} above: every team plays every round, tables rotate, and no team plays back-to-back when it can be avoided.</p>
         <form id="e-cfg" class="sched-form" novalidate>
@@ -509,6 +536,20 @@ export function eventView(root, ctx) {
           <div class="row-actions"><button class="btn primary" id="e-gen" type="submit">${draft ? 'Shuffle again' : 'Generate schedule'}</button></div></form>
         <div id="e-sched">${shown?.rows?.length ? schedBlock(shown, ev, evTeams) : '<p class="empty">No schedule yet — set the options above and generate one.</p>'}</div></section>`;
   }
+  const checksHTML = (teams) => teams.map((t) => `<label class="check"><input type="checkbox" data-tid="${esc(t.id)}" ${picks.has(t.id) ? 'checked' : ''}> <span><b>#${esc(t.number)}</b> ${esc(t.name)}</span></label>`).join('') || '<p class="empty">No teams yet — add one above.</p>';
+  // Refresh just the lists (not the forms), so typing / Enter-to-submit never loses focus or half-typed input.
+  function refreshLists() {
+    const ev = cur(); if (!ev) return;
+    const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
+    const c = host.querySelector('#e-checks'); if (c) c.innerHTML = checksHTML(teams);
+    const r = host.querySelector('#e-reflist'); if (r) r.innerHTML = refsHTML();
+    const h = host.querySelector('#e-teamcount'); if (h) { const n = eventTeams(ev, ctx.teams()).length; h.textContent = `(${n}${ev.teamIds?.length ? '' : ' · all teams'})`; }
+  }
+  function refsHTML() {
+    return refs.map((email) => { const p = people.find((x) => x.id === email); return `<li><span><b>${esc(p?.name || email.split('@')[0])}</b><small class="block">${esc(email)}${p && p.role !== 'judge' ? ` · also ${esc(ROLE_LABEL[p.role].toLowerCase())}` : ''}</small></span>
+      <button class="btn ghost small danger" data-rmref="${esc(email)}" aria-label="Remove referee ${esc(email)}">Remove</button></li>`; }).join('') || '<li class="empty">No referees added for this event yet.</li>';
+  }
+  async function loadRefs() { const ev = cur(); if (!ev) return; try { refs = (await ctx.store.get('eventJudges', ev.id))?.emails || []; } catch { refs = []; } const l = host.querySelector('#e-reflist'); if (l) l.innerHTML = refsHTML(); }
   function schedBlock(sch, ev, evTeams) {
     const st = sch.stats || {};
     const warn = st.minGap != null && st.minGap < 2 && st.slotsPerRound >= 2;
@@ -546,6 +587,20 @@ export function eventView(root, ctx) {
         e.target.reset(); host.querySelector('#e-tn').focus();
       });
     }
+    if (e.target.id === 'e-ref') {
+      const er = host.querySelector('#r-err'); er.hidden = true;
+      const email = normEmail(host.querySelector('#r-email').value);
+      const bad = (m) => { er.hidden = false; er.textContent = m; };
+      if (!EMAIL_RE.test(email)) return bad('Enter a valid Google email address.');
+      if (refs.includes(email)) return bad('Already a referee of this event.');
+      (async () => {
+        // Someone new needs an account to sign in; people who already have one just get added to this event's list.
+        const known = u.role === 'admin' && people.some((p) => p.id === email);
+        if (!known) { try { await ctx.store.put('access', email, { role: 'judge', name: host.querySelector('#r-name').value.trim(), addedBy: u.email, addedAt: Date.now(), eventIds: [ev.id] }); } catch { /* already has an account — fine */ } }
+        await ctx.store.put('eventJudges', ev.id, { emails: [...new Set([...refs, email])] });
+        refs = [...new Set([...refs, email])]; e.target.reset(); toast(`${email} can now score ${ev.name}`, 'ok'); loadRefs();
+      })().catch((x) => bad(x.message));
+    }
     if (e.target.id === 'e-cfg') {
       cfgIn = readCfg();
       const ids = eventTeams(ev, ctx.teams()).map((t) => t.id);
@@ -558,6 +613,15 @@ export function eventView(root, ctx) {
   host.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     const ev = cur();
+    if (b.dataset.rmref && confirm(`Remove ${b.dataset.rmref} as a referee of this event? (Any other role they have stays.)`)) run(async () => {
+      const email = b.dataset.rmref;
+      await ctx.store.put('eventJudges', ev.id, { emails: refs.filter((m) => m !== email) });
+      refs = refs.filter((m) => m !== email);
+      // a referee-only account this person was created for goes away once they referee nothing you can see
+      const p = people.find((x) => x.id === email);
+      if (p?.role === 'judge' && p.eventIds?.length === 1 && p.eventIds[0] === ev.id) { try { await ctx.store.remove('access', email); } catch { /* not allowed / already gone */ } }
+      loadRefs();
+    });
     if (b.id === 'e-all') { picks = new Set(ctx.teams().map((t) => t.id)); host.querySelectorAll('[data-tid]').forEach((c) => { c.checked = true; }); }
     if (b.id === 'e-none') { picks = new Set(); host.querySelectorAll('[data-tid]').forEach((c) => { c.checked = false; }); }
     if (b.id === 'e-saveteams') run(async () => { await ctx.store.patch('events', ev.id, { teamIds: [...picks] }); draft = null; draw(); toast(picks.size ? `${picks.size} teams saved` : 'All teams included', 'ok'); });
@@ -580,5 +644,6 @@ export function eventView(root, ctx) {
     if (b.id === 'e-sheets') run(async () => { await sendToSheets(`${ev.name} schedule`, exportTable()); toast('Sent to Google Sheets', 'ok'); });
   });
   draw();
-  return { update: () => { if (host.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return; draw(); } };
+  const unsubPeople = ctx.store.subscribe('access', (r) => { people = r; const ev = cur(); const l = host.querySelector('#e-reflist'); if (l && ev) l.innerHTML = refsHTML(ev); });
+  return { update: () => { if (host.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return refreshLists(); draw(); }, destroy: unsubPeople };
 }

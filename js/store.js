@@ -9,9 +9,21 @@ export const ROLES = ['admin', 'host', 'judge', 'coach', 'member'];
 export const ROLE_LABEL = { admin: 'Admin', host: 'Event host', judge: 'Judge', coach: 'Coach', member: 'Team member' };
 export const isTeamSide = (role) => role === 'coach' || role === 'member';
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// Events a signed-in user may run (host: only assigned ones; admin: all). eventHosts rows are { id: eventId, emails }.
+// Events a signed-in user may run: admins all of them; anyone else only the events whose eventHosts list has their
+// email (host is a per-event modifier — a coach or judge can be a host too). eventHosts rows are { id: eventId, emails }.
 export const hostedEvents = (user, events, eventHosts) => (user?.role === 'admin' ? events
-  : user?.role === 'host' ? events.filter((e) => eventHosts.some((h) => h.id === e.id && (h.emails || []).includes(user.email))) : []);
+  : user ? events.filter((e) => eventHosts.some((h) => h.id === e.id && (h.emails || []).includes(user.email))) : []);
+// Events the user is a listed referee for (a per-event modifier, so a coach or member can referee too).
+export const refereedEvents = (user, events, eventJudges) => (user ? events.filter((e) => eventJudges.some((j) => j.id === e.id && (j.emails || []).includes(user.email))) : []);
+// Events a user may enter official scores for: admins all; base-role judges all (or just their eventIds);
+// plus every event they host or referee.
+export const scoringEvents = (user, events, eventHosts, eventJudges = []) => {
+  if (!user) return [];
+  if (user.role === 'admin') return events;
+  const own = user.role === 'judge' ? (user.eventIds ? events.filter((e) => user.eventIds.includes(e.id)) : events) : [];
+  return [...new Map([...own, ...hostedEvents(user, events, eventHosts), ...refereedEvents(user, events, eventJudges)].map((e) => [e.id, e])).values()];
+};
+export const hasRole = (u, r) => Boolean(u) && (r === 'host' ? u.host : u.role === r);
 export const normEmail = (e) => String(e || '').trim().toLowerCase();
 export const scoreId = (eventId, teamId, round) => `${eventId}_${teamId}_R${round}`;
 export const eventTeams = (ev, teams) => (ev?.teamIds?.length ? teams.filter((t) => ev.teamIds.includes(t.id)) : teams);
@@ -21,7 +33,7 @@ const denied = (m) => err('permission-denied', m || 'Missing or insufficient per
 
 // ───────────────────────────── Demo backend ─────────────────────────────
 const KEY = 'glowboard-demo-v2';
-const COLS = ['teams', 'events', 'eventHosts', 'scores', 'signatures', 'practice', 'access'];
+const COLS = ['teams', 'events', 'eventHosts', 'eventJudges', 'scores', 'signatures', 'practice', 'access'];
 
 function mulberry(seed) { return () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -58,6 +70,7 @@ const DEMO_TEAMS = [
 export const DEMO_ACCOUNTS = [
   { email: 'admin@demo.test', role: 'admin', name: 'Dana (admin)' },
   { email: 'host@demo.test', role: 'host', name: 'Harper (host)' },
+  { email: 'cohost@demo.test', role: 'coach', teamId: 't5530', host: true, name: 'Coach Cam (also host)' },
   { email: 'judge@demo.test', role: 'judge', name: 'Jo (judge)' },
   { email: 'coach@demo.test', role: 'coach', teamId: 't4201', name: 'Coach Casey' },
   { email: 'member@demo.test', role: 'member', teamId: 't4201', name: 'Sam (parent)' },
@@ -69,7 +82,7 @@ function seedDemo() {
   const E1 = 'ev1', E2 = 'ev2';
   db.events[E1] = { id: E1, name: 'Regional Qualifier (demo)', date: '2026-11-14', live: true, teamIds: DEMO_TEAMS.map(([n]) => `t${n}`), createdAt: 2 };
   db.events[E2] = { id: E2, name: 'Season Opener Scrimmage (demo)', date: '2026-10-25', live: false, teamIds: ['t4201', 't5530'], createdAt: 1 };
-  db.eventHosts[E2] = { id: E2, emails: ['host@demo.test'] };
+  db.eventHosts[E2] = { id: E2, emails: ['host@demo.test', 'cohost@demo.test'] };
   DEMO_TEAMS.forEach(([number, name], i) => {
     const id = `t${number}`;
     db.teams[id] = { id, number, name, createdBy: 'demo' };
@@ -124,7 +137,7 @@ class DemoStore {
   // ----- auth -----
   get user() {
     const a = this.db.access[this.session];
-    return a ? { uid: a.id, email: a.id, name: a.name || a.id.split('@')[0], role: a.role, teamId: a.teamId || null } : null;
+    return a ? { uid: a.id, email: a.id, name: a.name || a.id.split('@')[0], role: a.role, teamId: a.teamId || null, host: a.role === 'host' || a.host === true, eventIds: a.eventIds || null } : null;
   }
   emitAuth() { const u = this.user; this.authListeners.forEach((f) => f(u)); }
   onAuth(cb) { this.authListeners.add(cb); cb(this.user); return () => this.authListeners.delete(cb); }
@@ -146,7 +159,9 @@ class DemoStore {
   isAdmin(u) { return u?.role === 'admin'; }
   coachOf(u, teamId) { return u?.role === 'coach' && u.teamId === teamId; }
   onTeam(u, teamId) { return isTeamSide(u?.role) && u.teamId === teamId; }
-  isHost(u) { return u?.role === 'host'; }
+  isHost(u) { return Boolean(u?.host); }
+  refereeOf(u, eventId) { return Boolean(u) && (this.db.eventJudges[eventId]?.emails || []).includes(u.email); }
+  judgeFor(u, eventId) { return this.isAdmin(u) || this.refereeOf(u, eventId) || (u?.role === 'judge' && (!u.eventIds || u.eventIds.includes(eventId))); }
   hostOf(u, eventId) { return this.isHost(u) && (this.db.eventHosts[eventId]?.emails || []).includes(u.email); }
   validTeam(d) { return Number.isInteger(d.number) && d.number > 0 && typeof d.name === 'string' && d.name.length > 0 && d.name.length <= 60; }
 
@@ -156,8 +171,9 @@ class DemoStore {
       const u = this.user;
       let rows = Object.values(this.db[col] || {});
       if (col === 'signatures') rows = [];
-      if (col === 'eventHosts') rows = this.isAdmin(u) ? rows : (u?.role === 'host' ? rows.filter((r) => (r.emails || []).includes(u.email)) : []);
-      if (col === 'access') rows = this.isAdmin(u) ? rows : (u?.role === 'coach' ? rows.filter((r) => r.teamId === u.teamId) : []);
+      if (col === 'eventJudges') rows = this.isAdmin(u) ? rows : rows.filter((r) => u && (r.emails || []).includes(u.email));
+      if (col === 'eventHosts') rows = this.isAdmin(u) ? rows : (u?.host ? rows.filter((r) => (r.emails || []).includes(u.email)) : []);
+      if (col === 'access') rows = this.isAdmin(u) ? rows : rows.filter((r) => (u?.role === 'coach' && r.teamId === u.teamId) || (u?.host && r.role === 'judge' && r.addedBy === u.email));
       if (col === 'practice') rows = this.isAdmin(u) ? rows : (isTeamSide(u?.role) ? rows.filter((r) => r.teamId === u.teamId) : []);
       cb(rows.map((r) => ({ ...r })));
     };
@@ -173,13 +189,20 @@ class DemoStore {
         if (!ROLES.includes(data.role) || (['coach', 'member'].includes(data.role) && typeof data.teamId !== 'string')) throw denied();
         if (id === u.email && data.role !== 'admin') throw denied('You can’t remove your own admin access.');
       } else {
-        const ok = this.coachOf(u, data.teamId) && data.role === 'member' && (!ex || (ex.role === 'member' && ex.teamId === data.teamId)) && data.addedBy === u?.email;
-        if (!ok) throw denied();
+        const asCoach = this.coachOf(u, data.teamId) && data.role === 'member' && (!ex || (ex.role === 'member' && ex.teamId === data.teamId)) && data.addedBy === u?.email
+          && Object.keys(data).every((k) => ['role', 'teamId', 'name', 'addedBy', 'addedAt'].includes(k));
+        // hosts add referees limited to ONE event they host
+        const asHost = this.isHost(u) && !ex && data.role === 'judge' && data.addedBy === u.email && Array.isArray(data.eventIds) && data.eventIds.length === 1 && this.hostOf(u, data.eventIds[0])
+          && Object.keys(data).every((k) => ['role', 'name', 'addedBy', 'addedAt', 'eventIds'].includes(k));
+        if (!asCoach && !asHost) throw denied();
       }
     } else if (col === 'teams') {
       if (!(this.isAdmin(u) || (this.isHost(u) && !ex && data.createdBy === u.email))) throw denied();
       if (!this.validTeam(data) || id !== `t${data.number}`) throw err('invalid', 'A team needs a number and a name.');
       if (!this.isAdmin(u) && data.createdBy !== u.email) throw denied();
+    } else if (col === 'eventJudges') {
+      this.need((x) => this.isAdmin(x) || this.hostOf(x, id));
+      if (!Array.isArray(data.emails)) throw err('invalid', 'emails must be a list.');
     } else if (col === 'eventHosts') {
       this.need(this.isAdmin);
       if (!Array.isArray(data.emails)) throw err('invalid', 'emails must be a list.');
@@ -187,7 +210,7 @@ class DemoStore {
       this.need(this.isAdmin);
       if (!String(data.name || '').trim()) throw err('invalid', 'An event needs a name.');
     } else if (col === 'scores') {
-      this.need((x) => ['judge', 'admin'].includes(x.role) || this.hostOf(x, data.eventId));
+      this.need((x) => this.judgeFor(x, data.eventId) || this.hostOf(x, data.eventId));
       if (ex) this.need(this.isAdmin);
       else if (data.judgeUid !== u.uid || data.hasSignature !== true || ![2, 3, 4].includes(data.gp) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1000)) throw denied();
       if (!this.db.events[data.eventId] || !this.db.teams[data.teamId] || ![1, 2, 3].includes(data.round) || id !== scoreId(data.eventId, data.teamId, data.round)) throw denied();
@@ -221,20 +244,23 @@ class DemoStore {
     this.persist(); this.emit();
   }
   async get(col, id) {
-    if (col === 'signatures') this.need((x) => ['judge', 'admin', 'host'].includes(x.role));
+    if (col === 'signatures') { const ev = id.split('_')[0]; this.need((x) => this.judgeFor(x, ev) || this.hostOf(x, ev)); }
+    if (col === 'eventJudges') this.need((x) => this.isAdmin(x) || this.hostOf(x, id) || (this.db.eventJudges[id]?.emails || []).includes(x.email));
     const r = this.db[col][id];
     return r ? { ...r } : null;
   }
   async remove(col, id) {
     const u = this.user, row = this.db[col][id];
     if (col === 'access') {
-      const ok = (this.isAdmin(u) && id !== u.email) || (this.coachOf(u, row?.teamId) && row?.role === 'member');
+      const ok = (this.isAdmin(u) && id !== u.email) || (this.coachOf(u, row?.teamId) && row?.role === 'member')
+        || (this.isHost(u) && row?.role === 'judge' && row.addedBy === u.email);
       if (!ok) throw denied(id === u?.email ? 'You can’t remove your own access.' : undefined);
     } else if (col === 'practice') {
       if (!(this.isAdmin(u) || this.coachOf(u, row?.teamId) || (this.onTeam(u, row?.teamId) && row.uid === u.uid))) throw denied();
     } else if (col === 'teams') {
       if (!(this.isAdmin(u) || (this.isHost(u) && row?.createdBy === u.email))) throw denied();
-    } else if (['events', 'eventHosts', 'scores'].includes(col)) this.need(this.isAdmin);
+    } else if (col === 'eventJudges') this.need((x) => this.isAdmin(x) || this.hostOf(x, id));
+    else if (['events', 'eventHosts', 'scores'].includes(col)) this.need(this.isAdmin);
     else throw denied();
     delete this.db[col][id];
     if (col === 'scores') delete this.db.signatures[id];
@@ -259,7 +285,7 @@ class FirebaseStore {
     this.fdb = fs.getFirestore(this.fapp);
     auth.onAuthStateChanged(this.auth, async (fu) => {
       if (!fu) { this.cur = null; return this.emitAuth(); }
-      const prof = await this.fetchProfile(fu);
+      const prof = await this.fetchProfile(fu).catch(() => null);
       // Signed in with Google but not on the access list → no permissions at all: sign straight back out.
       if (!prof) { this.cur = null; this.emitAuth(); auth.signOut(this.auth).catch(() => {}); return; }
       this.cur = prof;
@@ -269,12 +295,16 @@ class FirebaseStore {
   async fetchProfile(fu) {
     const { fs } = this.sdk;
     const email = normEmail(fu.email);
-    try {
-      const d = await fs.getDoc(fs.doc(this.fdb, 'access', email));
-      if (!d.exists()) return null;
-      const a = d.data();
-      return { uid: fu.uid, email, name: a.name || email.split('@')[0], role: a.role, teamId: a.teamId || null };
-    } catch { return null; }
+    let d;
+    try { d = await fs.getDoc(fs.doc(this.fdb, 'access', email)); } catch (e) {
+      // Not "you're not listed" — Firestore refused to even answer. Almost always: the rules aren't published yet.
+      throw err(e.code || 'unavailable', e.code === 'permission-denied'
+        ? `Signed in as ${email}, but Firestore blocked reading the access list. Publish the latest firestore.rules (Firebase console → Firestore Database → Rules → paste → Publish), then try again.`
+        : `Signed in as ${email}, but the access list couldn’t be read (${e.code || e.message}). Check your connection and that Firestore is created, then try again.`);
+    }
+    if (!d.exists()) return null;
+    const a = d.data();
+    return { uid: fu.uid, email, name: a.name || email.split('@')[0], role: a.role, teamId: a.teamId || null, host: a.role === 'host' || a.host === true, eventIds: a.eventIds || null };
   }
   get user() { return this.cur; }
   emitAuth() { this.authListeners.forEach((f) => f(this.cur)); }
@@ -283,8 +313,9 @@ class FirebaseStore {
     const { auth } = this.sdk;
     let cred;
     try { cred = await auth.signInWithPopup(this.auth, new auth.GoogleAuthProvider()); } catch (e) { throw friendly(e); }
+    const email = normEmail(cred.user.email);
     const prof = await this.fetchProfile(cred.user);
-    if (!prof) throw err('not-authorized', `${normEmail(cred.user.email)} isn’t on the access list. Ask your coach or an admin to add this Google account, then sign in again.`);
+    if (!prof) throw err('not-authorized', `${email} isn’t on the access list. Ask your coach or an admin to add this Google account, then sign in again. (First admin? In Firestore create collection “access”, Document ID exactly “${email}”, field role = admin.)`);
     return prof;
   }
   async signOut() { await this.sdk.auth.signOut(this.auth); }
@@ -293,13 +324,24 @@ class FirebaseStore {
     const u = this.cur;
     let q = fs.collection(this.fdb, col);
     if (col === 'signatures') { cb([]); return () => {}; }
-    if (col === 'access') {
-      if (u?.role === 'coach') q = fs.query(q, fs.where('teamId', '==', u.teamId));
-      else if (u?.role !== 'admin') { cb([]); return () => {}; }
+    if (col === 'access' && u?.role !== 'admin') {
+      // a coach sees their team; a host sees the referees they added — a coach who is also a host sees both
+      const queries = [];
+      if (u?.role === 'coach') queries.push(fs.query(q, fs.where('teamId', '==', u.teamId)));
+      if (u?.host) queries.push(fs.query(q, fs.where('role', '==', 'judge'), fs.where('addedBy', '==', u.email)));
+      if (!queries.length) { cb([]); return () => {}; }
+      const parts = queries.map(() => []);
+      const emit = () => cb([...new Map(parts.flat().map((r) => [r.id, r])).values()]);
+      const unsubs = queries.map((qq, i) => fs.onSnapshot(qq, (snap) => { parts[i] = snap.docs.map((d) => ({ id: d.id, ...d.data() })); emit(); }, (e) => console.warn('[firestore] access:', e.code)));
+      return () => unsubs.forEach((f) => f());
     }
     if (col === 'eventHosts') {
-      if (u?.role === 'host') q = fs.query(q, fs.where('emails', 'array-contains', u.email));
-      else if (u?.role !== 'admin') { cb([]); return () => {}; }
+      if (u?.role === 'admin') { /* all */ } else if (u?.host) q = fs.query(q, fs.where('emails', 'array-contains', u.email));
+      else { cb([]); return () => {}; }
+    }
+    if (col === 'eventJudges') { // admins see every list; everyone else only the events they referee
+      if (u?.role === 'admin') { /* all */ } else if (u) q = fs.query(q, fs.where('emails', 'array-contains', u.email));
+      else { cb([]); return () => {}; }
     }
     if (col === 'practice') {
       if (isTeamSide(u?.role)) q = fs.query(q, fs.where('teamId', '==', u.teamId));

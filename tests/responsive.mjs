@@ -44,7 +44,7 @@ async function newPage(vp) {
   await page.setViewport({ width: vp.width, height: vp.height, deviceScaleFactor: 2, isMobile: vp.mobile, hasTouch: vp.mobile });
   page.errors = [];
   await forceDemo(page);
-  page.on('pageerror', (e) => page.errors.push('pageerror: ' + e.message));
+  page.on('pageerror', (e) => page.errors.push('pageerror: ' + e.message + (process.env.STACK ? '\n' + e.stack : '')));
   page.on('console', (m) => { if (m.type() === 'error') page.errors.push('console: ' + m.text()); });
   page.on('requestfailed', (r) => { if (!r.url().endsWith('.jpg')) page.errors.push('requestfailed: ' + r.url()); });
   page.on('response', (r) => { if (r.status() >= 400 && !r.url().endsWith('.jpg')) page.errors.push(`http ${r.status()}: ${r.url()}`); });
@@ -55,10 +55,11 @@ const go = async (page, hash = '') => { await page.goto(base + (hash ? '#/' + ha
 const goHash = async (page, hash) => { await page.evaluate((h) => { location.hash = '#/' + h; }, hash); await page.waitForSelector('main .page > *'); await new Promise((r) => setTimeout(r, 120)); };
 async function login(page, email) { // demo mode simulates Google sign-in with one button per demo role
   await goHash(page, 'login');
-  await page.click(`[data-demo="${email}"]`);
+  await page.$eval(`[data-demo="${email}"]`, (e) => e.click());
   await page.waitForFunction(() => !location.hash.includes('login'));
   await new Promise((r) => setTimeout(r, 150));
 }
+const tap = (pg, sel) => pg.$eval(sel, (e) => { e.scrollIntoView({ block: 'center' }); e.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); }); // the phone tab bar is fixed at the bottom and can sit over an element's centre
 const text = (page, sel) => page.$eval(sel, (e) => e.textContent.trim());
 
 // Layout audit run inside the page.
@@ -111,10 +112,10 @@ for (const vp of VIEWPORTS) {
     await assertLayout(page, 'dashboard'); await shot(page, `${vp.name}-dashboard`);
   });
   await check('team detail dialog opens and fits', async () => {
-    await page.click('.standings .row'); await page.waitForSelector('dialog[open] .round');
+    await tap(page, '.standings .row'); await page.waitForSelector('dialog[open] .round');
     const r = await page.$eval('dialog[open]', (d) => { const b = d.getBoundingClientRect(); return { l: b.left, r: b.right, w: innerWidth }; });
     assert.ok(r.l >= 0 && r.r <= r.w, 'dialog within viewport'); await shot(page, `${vp.name}-dialog`);
-    await page.click('dialog[open] [data-close]'); await page.waitForFunction(() => !document.querySelector('dialog'));
+    await tap(page, 'dialog[open] [data-close]'); await page.waitForFunction(() => !document.querySelector('dialog'));
   });
   await check('schedule page (public)', async () => { await goHash(page, 'schedule'); await assertLayout(page, 'schedule'); await shot(page, `${vp.name}-schedule`); });
   await check('login page', async () => { await goHash(page, 'login'); await assertLayout(page, 'login'); await shot(page, `${vp.name}-login`); });
@@ -162,7 +163,7 @@ await check('login is Google-only; an unlisted Google account is refused', async
 await login(page, 'judge@demo.test');
 
 await check('judge nav shows Judge but not Host/Practice/My stats', async () => {
-  const links = await page.$$eval('#nav a', (a) => a.map((x) => x.textContent));
+  const links = await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent));
   assert.deepEqual(links, ['Standings', 'Schedule', 'Judge']);
 });
 
@@ -286,7 +287,7 @@ await check('judges cannot delete scores or touch teams/accounts', async () => {
 await page.evaluate(() => document.getElementById('signout').click());
 await login(page, 'coach@demo.test');
 await check('coach nav shows Practice, Team stats and My team only', async () => {
-  assert.deepEqual(await page.$$eval('#nav a', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']);
 });
 await check('team can save a practice run (no signature needed) and sees it in stats', async () => {
   await goHash(page, 'practice');
@@ -299,7 +300,11 @@ await check('team can save a practice run (no signature needed) and sees it in s
   await goHash(page, 'stats');
   assert.match(await text(page, '.kpis'), /Practice runs\s*7/);
   assert.ok((await page.$$('.history li')).length === 7);
-  assert.ok((await page.$$('.bars li')).length === 15);
+  assert.equal((await page.$$('.mrow')).length, 15, 'one expandable row per mission');
+  for (const t of ['Most reliable missions', 'Least reliable missions', 'Weakest individual tasks', 'Biggest points left']) assert.match(await text(page, '#st'), new RegExp(t));
+  await page.$eval('.mrow summary', (e) => e.click()); assert.ok((await page.$$('.mrow[open] .bars.sub li')).length >= 1, 'mission rows expand to per-task success rates');
+  await page.select('#st-range', '5'); assert.match(await text(page, '.toolbar'), /Analysing\s*5\s*of\s*7/);
+  await page.select('#st-range', 'all');
   await shot(page, 'flow-stats');
 });
 await check('coaches cannot submit official scores, read signatures or see other teams’ practice runs', async () => {
@@ -320,12 +325,12 @@ await check('team can delete only via UI its own practice run', async () => {
 
 await check('coach: renames their team and adds/removes a member (but cannot touch other teams)', async () => {
   await goHash(page, 'team');
-  await page.$eval('#t-name', (e) => { e.value = ''; }); await page.type('#t-name', 'Robo Rangers <i>X</i>'); await page.click('#t-rename button');
+  await page.$eval('#t-name', (e) => { e.value = ''; }); await page.type('#t-name', 'Robo Rangers <i>X</i>'); await tap(page, '#t-rename button');
   await page.waitForFunction(() => document.querySelector('#t-title').textContent.includes('Robo Rangers <i>X</i>'));
   assert.equal(await page.$('#t-title i'), null, 'team name is HTML-escaped');
-  await page.type('#t-email', 'Parent@Gmail.com'); await page.type('#t-pname', 'Sam’s mom'); await page.click('#t-add button');
+  await page.type('#t-email', 'Parent@Gmail.com'); await page.type('#t-pname', 'Sam’s mom'); await tap(page, '#t-add button');
   await page.waitForFunction(() => document.querySelector('#t-people').textContent.includes('parent@gmail.com'));
-  await page.type('#t-email', 'parent@gmail.com'); await page.click('#t-add button');
+  await page.type('#t-email', 'parent@gmail.com'); await tap(page, '#t-add button');
   await page.waitForFunction(() => !document.getElementById('t-err').hidden);
   assert.match(await text(page, '#t-err'), /already on your team/);
   const r = await page.evaluate(async () => {
@@ -354,28 +359,28 @@ await page.evaluate(() => document.getElementById('signout').click());
 await login(page, 'admin@demo.test');
 await check('admin: events, teams, people & access, CSV, edit score, delete score', async () => {
   await goHash(page, 'admin');
-  await page.type('#a-evn', 'State <b>Finals</b>'); await page.click('#a-ev button');
+  await page.type('#a-evn', 'State <b>Finals</b>'); await tap(page, '#a-ev button');
   await page.waitForFunction(() => document.querySelector('#a-events').textContent.includes('State'));
   assert.equal(await page.$('#a-events b b'), null, 'event names are HTML-escaped');
   await page.$eval('[data-evlive]', (e) => e.click());
   await page.waitForFunction(() => document.querySelectorAll('#a-events .live-b').length === 1);
-  await page.click('#a-team button'); assert.match(await text(page, '#a-terr'), /number is required/);
-  await page.type('#a-tn', '55'); await page.click('#a-team button'); assert.match(await text(page, '#a-terr'), /name is required/);
+  await tap(page, '#a-team button'); assert.match(await text(page, '#a-terr'), /number is required/);
+  await page.type('#a-tn', '55'); await tap(page, '#a-team button'); assert.match(await text(page, '#a-terr'), /name is required/);
   await page.$eval('#a-tn', (e) => { e.value = ''; });
-  await page.type('#a-tn', '1234'); await page.type('#a-tname', 'Test <b>Team</b>'); await page.click('#a-team button');
+  await page.type('#a-tn', '1234'); await page.type('#a-tname', 'Test <b>Team</b>'); await tap(page, '#a-team button');
   await page.waitForFunction(() => document.querySelector('#a-teams').textContent.includes('#1234'));
   assert.equal(await page.$('#a-teams b b'), null, 'team names are HTML-escaped');
   await page.$eval('.bulk summary', (e) => e.click());
   await page.type('#a-bulk', '777, Alpha\n888, Beta\nbad line'); await page.$eval('#a-bulkgo', (e) => e.click());
   await page.waitForFunction(() => document.querySelector('#a-teams').textContent.includes('#888'));
-  await page.type('#a-ue', 'NewJudge@Gmail.com'); await page.select('#a-ur', 'judge'); await page.click('#a-user button');
+  await page.type('#a-ue', 'NewJudge@Gmail.com'); await page.select('#a-ur', 'judge'); await tap(page, '#a-user button');
   await page.waitForFunction(() => document.querySelector('#a-users').textContent.includes('newjudge@gmail.com'));
-  await page.type('#a-ue', 'second.coach@gmail.com'); await page.select('#a-ur', 'coach'); await page.select('#a-ut', 't4201'); await page.click('#a-user button');
+  await page.type('#a-ue', 'second.coach@gmail.com'); await page.select('#a-ur', 'coach'); await page.select('#a-ut', 't4201'); await tap(page, '#a-user button');
   await page.waitForFunction(() => document.querySelector('#a-users').textContent.includes('second.coach@gmail.com'));
-  await page.type('#a-ue', 'friend@gmail.com'); await page.select('#a-ur', 'admin'); await page.click('#a-user button');
+  await page.type('#a-ue', 'friend@gmail.com'); await page.select('#a-ur', 'admin'); await tap(page, '#a-user button');
   await page.waitForFunction(() => document.querySelector('#a-users').textContent.includes('friend@gmail.com'));
   assert.equal(await page.$('[data-rmp="admin@demo.test"]'), null, 'no Remove button for yourself');
-  await page.type('#a-ue', 'not an email'); await page.click('#a-user button');
+  await page.type('#a-ue', 'not an email'); await tap(page, '#a-user button');
   await page.waitForFunction(() => !document.getElementById('a-uerr').hidden);
   await page.$eval('#a-ue', (e) => { e.value = ''; });
   const csv = await page.evaluate(async () => {
@@ -400,27 +405,28 @@ await check('host can re-score a match that was deleted', async () => {
 await check('admin assigns an event host; host manages teams and builds + saves a schedule; it shows on the public page', async () => {
   await goHash(page, 'admin');
   await page.$eval('[data-evhosts="ev1"]', (e) => e.click()); await page.waitForSelector('dialog[open] #h-email');
-  await page.type('dialog #h-email', 'Pat.Host@Gmail.com'); await page.click('dialog #h-add button');
+  await page.type('dialog #h-email', 'Pat.Host@Gmail.com'); await tap(page, 'dialog #h-add button');
   await page.waitForFunction(() => document.querySelector('dialog[open]').textContent.includes('pat.host@gmail.com'));
-  await page.type('dialog #h-email', 'coach@demo.test'); await page.click('dialog #h-add button');
-  await page.waitForFunction(() => /already a coach/.test(document.querySelector('#h-err').textContent));
+  await page.type('dialog #h-email', 'coach@demo.test'); await tap(page, 'dialog #h-add button');
+  await page.waitForFunction(() => document.querySelector('dialog[open]').textContent.includes('coach@demo.test')); // a coach can ALSO be a host (host is a modifier)
   await page.$eval('dialog [data-close]', (e) => e.click());
-  assert.match(await text(page, '#a-events'), /1 host/);
+  assert.match(await text(page, '#a-events'), /2 hosts/);
+  assert.match(await text(page, '#a-users'), /coach@demo\.test[\s\S]*|Coach Casey/); assert.ok((await page.$$('#a-users .live-b')).length >= 1, 'host badge on people list');
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'host@demo.test');
-  assert.deepEqual(await page.$$eval('#nav a', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Event']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Event']);
   await goHash(page, 'event');
   assert.match(await text(page, '#ev'), /Season Opener/);
   assert.equal(await page.$('#e-sel'), null, 'host of one event sees only that event');
-  await page.click('#e-team button'); assert.match(await text(page, '#e-terr'), /number is required/);
-  await page.type('#e-tn', '8800'); await page.click('#e-team button'); assert.match(await text(page, '#e-terr'), /name is required/);
-  await page.type('#e-tname', 'Host <i>Added</i>'); await page.click('#e-team button');
+  await tap(page, '#e-team button'); assert.match(await text(page, '#e-terr'), /number is required/);
+  await page.type('#e-tn', '8800'); await tap(page, '#e-team button'); assert.match(await text(page, '#e-terr'), /name is required/);
+  await page.type('#e-tname', 'Host <i>Added</i>'); await tap(page, '#e-team button');
   await page.waitForFunction(() => document.querySelector('#e-checks').textContent.includes('#8800'));
   assert.equal(await page.$('#e-checks i'), null, 'team names are HTML-escaped');
   await page.$eval('#e-all', (e) => e.click()); await page.$eval('#e-saveteams', (e) => e.click());
   await page.waitForFunction(() => document.querySelector('.toast.ok'));
   await page.$eval('#c-rounds', (e) => { e.value = '4'; }); await page.$eval('#c-tables', (e) => { e.value = '3'; }); await page.$eval('#c-start', (e) => { e.value = '10:00'; });
-  await page.click('#e-gen'); await page.waitForSelector('#e-save');
+  await tap(page, '#e-gen'); await page.waitForSelector('#e-save');
   assert.match(await text(page, '#e-sched'), /Preview \(not saved\)/);
   assert.equal((await page.$$('#e-sched table')).length, 4, 'one table per round');
   const firstTime = await page.$eval('#e-sched tbody th', (e) => e.textContent); assert.equal(firstTime, '10:00');
@@ -441,6 +447,9 @@ await check('admin assigns an event host; host manages teams and builds + saves 
   assert.equal((await page.$$('.mine .chip')).length, 4, 'the team’s 4 matches are listed');
   assert.ok((await page.$$('.sched td.hit')).length >= 4);
   await assertLayout(page, 'schedule with data'); await shot(page, 'flow-schedule');
+  await goHash(page, 'event');
+  await page.type('#r-email', 'Ref.Rae@Gmail.com'); await page.type('#r-name', 'Ref Rae'); await tap(page, '#e-ref button');
+  await page.waitForFunction(() => document.querySelector('#e-reflist').textContent.includes('ref.rae@gmail.com'));
   await goHash(page, 'admin'); assert.match(await text(page, 'main'), /Admins only/);
   const r = await page.evaluate(async () => {
     const { createStore } = await import('./js/store.js'); const s = await createStore(); const out = [];
@@ -451,6 +460,40 @@ await check('admin assigns an event host; host manages teams and builds + saves 
     return out;
   });
   assert.deepEqual(r, Array(7).fill('permission-denied'), 'host powers are limited to their own event + teams they created');
+  const ref = await page.evaluate(async () => {   // the referee the host added: scores their event only
+    const { createStore } = await import('./js/store.js'); const s = await createStore(); const out = [];
+    await s.signInAs('ref.rae@gmail.com');
+    const base = { teamId: 't4201', round: 2, total: 10, gp: 3, judgeUid: s.user.uid, number: 4201, name: 'x', hasSignature: true };
+    for (const eventId of ['ev1', 'ev2']) { try { await s.submitScore({ ...base, eventId }, 'sig'); out.push('allowed'); } catch (e) { out.push(e.code); } }
+    try { await s.put('teams', 't1', { number: 1, name: 'x', createdBy: 'ref.rae@gmail.com' }); out.push('allowed'); } catch (e) { out.push(e.code); }
+    await s.signInAs('host@demo.test');
+    return out;
+  });
+  assert.deepEqual(ref, ['permission-denied', 'allowed', 'permission-denied'], 'referee can score the host’s event only and nothing else');
+});
+await check('coach who is also a host: coach pages + host pages, phone bar = 4 tabs + More, nothing leaks to other events', async () => {
+  await page.evaluate(() => document.getElementById('signout').click());
+  await login(page, 'cohost@demo.test');
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Practice', 'Stats', 'Team', 'Event']);
+  assert.equal(await page.$$eval('#nav > a', (a) => a.length), 4); assert.ok(await page.$('#nav-more'));
+  assert.match(await text(page, '#who'), /host/i);
+  const box = await page.$eval('#nav', (e) => { const r = e.getBoundingClientRect(); return { bottom: r.bottom, h: innerHeight, items: [...e.children].filter((c) => c.tagName !== 'DIV').map((c) => c.getBoundingClientRect().width) }; });
+  assert.ok(Math.abs(box.bottom - box.h) < 2, 'tab bar is pinned to the bottom of the screen'); assert.ok(box.items.every((w) => w >= 60), 'each tab is at least 60px wide: ' + box.items);
+  await tap(page, '#nav-more'); await shot(page, 'flow-more-menu'); // (a full-page capture resizes the viewport, which can re-render the bar)
+  if (await page.$eval('#nav-sheet', (e) => e.hidden)) await tap(page, '#nav-more');
+  await tap(page, '#nav-sheet a[href="#/event"]'); await page.waitForSelector('#ev');
+  assert.match(await text(page, '#ev'), /Season Opener/); assert.equal(await page.$('#e-sel'), null, 'only the event they host');
+  await goHash(page, 'team'); assert.ok(await page.$('#t-add'), 'keeps coach powers');
+  await goHash(page, 'practice'); assert.ok(await page.$('#sc-submit'), 'can submit practice runs for their team');
+  await goHash(page, 'judge'); assert.deepEqual(await page.$$eval('#sc-event option', (o) => o.map((x) => x.value)), ['ev2'], 'can score only the event they host');
+  const r = await page.evaluate(async () => {
+    const { createStore } = await import('./js/store.js'); const s = await createStore(); const out = [];
+    for (const f of [() => s.patch('events', 'ev1', { teamIds: [] }), () => s.put('access', 'q@gmail.com', { role: 'judge', name: '', addedBy: s.user.email, addedAt: 1, eventIds: ['ev1'] }), () => s.put('access', 'q@gmail.com', { role: 'admin' })]) {
+      try { await f(); out.push('allowed'); } catch (e) { out.push(e.code); }
+    }
+    return out;
+  });
+  assert.deepEqual(r, Array(3).fill('permission-denied'));
 });
 await check('theme toggle switches and persists', async () => {
   await page.$eval('#theme', (e) => e.click());
@@ -468,7 +511,7 @@ console.log('\n[live] two tabs');
   await go(a);
   const b = await a.ctx.newPage(); await forceDemo(b); await b.setViewport({ width: 1280, height: 800 });
   await b.goto(base + '#/login', { waitUntil: 'networkidle0' });
-  await b.click('[data-demo="admin@demo.test"]');
+  await b.$eval('[data-demo="admin@demo.test"]', (e) => e.click());
   await b.waitForFunction(() => !location.hash.includes('login'));
   await check('public dashboard updates live when another tab changes data', async () => {
     const before = (await a.$$('.standings .row')).length;

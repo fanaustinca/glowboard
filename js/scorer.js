@@ -71,7 +71,8 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
         <label class="field"><span>Team</span><select id="sc-team" required><option value="">Select a team…</option>${teamOptions()}</select></label>
         <label class="field"><span>Match</span><select id="sc-round">${Array.from({ length: MATCHES_PER_TEAM }, (_, i) => `<option value="${i + 1}">Official match ${i + 1}</option>`).join('')}</select></label>
         <label class="field"><span>Table</span><input id="sc-table" inputmode="text" maxlength="12" placeholder="e.g. 3" autocomplete="off"></label>` : `
-        <p class="muted">Score your team’s practice runs with the official rules. Only your team’s coaches and members can see them — they never appear on the public standings.</p>`}
+        <p class="muted">Score your team’s practice runs with the official rules — the same form judges use. Runs are saved under your team’s name; only your coaches and members can see them, and they never appear on the public standings.</p>
+        <label class="field"><span>Note <small>(optional — what were you testing?)</small></span><input id="sc-note" maxlength="80" autocomplete="off" placeholder="e.g. new attachment for M05"></label>`}
       </div>
       <div id="sc-status" class="status" hidden></div>
     </section>
@@ -287,9 +288,10 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
       } else {
         const id = store.newId('p');
         await store.put('practice', id, {
-          uid: u.uid, by: u.name, teamId: u.teamId, total: res.total, gp: res.gp, state: res.state, result: slim(res), createdAt: Date.now(),
+          uid: u.uid, by: u.name, teamId: u.teamId, note: ($('#sc-note')?.value || '').trim(), total: res.total, gp: res.gp, state: res.state, result: slim(res), createdAt: Date.now(),
         });
         toast(`Practice run saved: ${res.total} pts`, 'ok');
+        if ($('#sc-note')) $('#sc-note').value = '';
         reset(true);
       }
     } catch (e) { showError(e.message || 'Could not save.'); } finally { busy = false; $('#sc-submit').disabled = false; }

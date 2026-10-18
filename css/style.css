@@ -180,7 +180,7 @@ button.opt { cursor: pointer; } button.opt:hover:not(:disabled) { background: va
 .rules-ref ul { margin: 6px 0 0; padding-left: 18px; font-size: .9rem; color: var(--muted); } .rules-ref li { margin-bottom: 6px; }
 
 /* ---- stats ---- */
-.kpis { display: grid; gap: 12px; grid-template-columns: repeat(2, 1fr); } @media (min-width: 720px) { .kpis { grid-template-columns: repeat(4, 1fr); } }
+.kpis { display: grid; gap: 12px; grid-template-columns: repeat(2, 1fr); } @media (min-width: 720px) { .kpis { grid-template-columns: repeat(3, 1fr); } }
 .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; box-shadow: var(--shadow); display: grid; } .kpi span { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; } .kpi b { font-size: 1.9rem; font-variant-numeric: tabular-nums; }
 .spark { width: 100%; height: auto; max-height: 140px; } .chips { list-style: none; padding: 0; margin: 6px 0 0; display: flex; gap: 8px; flex-wrap: wrap; } .chips li { background: var(--surface2); border-radius: 99px; padding: 4px 12px; }
 .focus { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; } .focus li { background: var(--surface2); border-radius: 12px; padding: 10px 12px; display: grid; } .focus small { color: var(--muted); }
@@ -233,5 +233,31 @@ button.opt { cursor: pointer; } button.opt:hover:not(:disabled) { background: va
 .sched-meta { margin: 8px 0; } .chip { display: inline-block; background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 4px 10px; margin: 2px 2px; font-weight: 600; font-size: .9rem; }
 .mine { margin: 0 0 12px; line-height: 2; } .badge.warnb { background: #f59f00; color: #1d1d1d; }
 .evtitle { margin: 0 0 12px; }
-@media (max-width: 480px) { .nav a { padding: 8px 2px; font-size: .78rem; min-width: 0; } }
 @media (min-width: 720px) and (max-width: 940px) { .bn, .user b { display: none; } }
+
+/* ---- nav icons + roomy phone tabs (+ "More" sheet when there are more than 5) ---- */
+.ni { font-size: 1.05rem; line-height: 1; margin-right: 6px; }
+@media (min-width: 720px) and (max-width: 940px) { .ni { display: none; } }
+@media (max-width: 719px) {
+  .nav a, .nav .more { flex: 1 1 0; min-width: 0; flex-direction: column; justify-content: center; align-items: center; gap: 3px; padding: 6px 2px; min-height: 56px; font-size: .78rem; line-height: 1.1; border-radius: 12px; }
+  .nav .ni { margin: 0; font-size: 1.35rem; }
+  .nav .more { background: none; border: 0; color: var(--muted); font-family: inherit; font-weight: 600; display: inline-flex; cursor: pointer; }
+  .nav .more.on, .nav .more[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+  .nav-sheet { position: absolute; bottom: calc(100% + 8px); right: 8px; min-width: 200px; display: grid; gap: 2px; padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 8px 28px rgb(0 0 0 / .18); }
+  .nav-sheet[hidden] { display: none; }
+  .nav .nav-sheet a { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 12px 14px; min-height: 48px; font-size: 1rem; }
+  .nav .nav-sheet .ni { font-size: 1.2rem; }
+  main { padding-bottom: 96px; }
+}
+.rel { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; } .rel li { display: grid; grid-template-columns: 1fr 90px 44px; align-items: center; gap: 10px; }
+.bt.good i { background: #2f9e44; } .bt.bad i { background: #e03131; }
+.bl small { display: block; opacity: .75; font-weight: 400; font-size: .8rem; }
+.kpi small { display: block; font-size: .75rem; opacity: .8; } .kpi small.up { color: #2f9e44; } .kpi small.down { color: #e03131; }
+.mlist { display: grid; gap: 6px; } .mrow { background: var(--surface2); border-radius: 12px; padding: 4px 12px; }
+.mrow summary { display: grid; grid-template-columns: 1fr 90px 64px; align-items: center; gap: 10px; min-height: 52px; cursor: pointer; list-style: none; }
+.mrow summary::-webkit-details-marker { display: none; } .mrow .bars.sub { margin: 4px 0 10px; }
+.bv small { font-weight: 400; opacity: .7; }
+@media (max-width: 480px) { .rel li, .mrow summary { grid-template-columns: 1fr 64px 44px; } }
+/* backdrop-filter makes the header a containing block for position:fixed, which pinned the phone tab bar under the header */
+@media (max-width: 719px) { .top { backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--surface); } }
+@media (max-width: 719px) { .nav > a > .nl[data-short] { font-size: 0; } .nav > a > .nl[data-short]::after { content: attr(data-short); font-size: .78rem; } }

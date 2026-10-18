@@ -18,6 +18,8 @@ await env.withSecurityRulesDisabled(async (c) => {
   await w('access/judge@x.com', { role: 'judge' });
   await w('access/host@x.com', { role: 'host' });
   await w('access/host2@x.com', { role: 'host' });
+  await w('access/coachhost@x.com', { role: 'coach', teamId: 't1', host: true });
+  await w('access/scoped@x.com', { role: 'judge', eventIds: ['ev2'], addedBy: 'host2@x.com' });
   await w('access/coach@x.com', { role: 'coach', teamId: 't1' });
   await w('access/coach2@x.com', { role: 'coach', teamId: 't2' });
   await w('access/mem@x.com', { role: 'member', teamId: 't1' });
@@ -25,19 +27,22 @@ await env.withSecurityRulesDisabled(async (c) => {
   await w('teams/t2', { number: 2, name: 'Beta' });
   await w('events/ev1', { name: 'Regional', live: true });
   await w('events/ev2', { name: 'Other event', live: false });
-  await w('eventHosts/ev1', { emails: ['host@x.com'] });
+  await w('eventHosts/ev1', { emails: ['host@x.com', 'coachhost@x.com'] });
   await w('eventHosts/ev2', { emails: ['host2@x.com'] });
   await w('teams/t7', { number: 7, name: 'Seven', createdBy: 'host@x.com' });
   await w('teams/t8', { number: 8, name: 'Eight', createdBy: 'host2@x.com' });
   await w('practice/p1', { uid: 'u-coach', teamId: 't1', total: 100 });
   await w('practice/p2', { uid: 'u-coach2', teamId: 't2', total: 90 });
   await w('signatures/ev1_t1_R1', { signature: 'data:x' });
+  await w('eventJudges/ev1', { emails: ['coach2@x.com'] });
   await w('scores/ev1_t1_R1', { eventId: 'ev1', teamId: 't1', round: 1, total: 100, gp: 3, hasSignature: true, judgeUid: 'u-judge' });
 });
 const as = (uid, email, verified = true) => env.authenticatedContext(uid, { email, email_verified: verified }).firestore();
 const anon = env.unauthenticatedContext().firestore();
 const admin = as('u-admin', 'admin@x.com'), judge = as('u-judge', 'judge@x.com'), coach = as('u-coach', 'coach@x.com'), coach2 = as('u-coach2', 'coach2@x.com');
+const coachHost = as('u-ch', 'coachhost@x.com'), scoped = as('u-sc', 'scoped@x.com');
 const host = as('u-host', 'host@x.com'), host2 = as('u-host2', 'host2@x.com');
+const judge2 = as('u-sc', 'scoped@x.com');
 const mem = as('u-mem', 'mem@x.com'), stranger = as('u-s', 'ghost@gmail.com'), unverified = as('u-admin2', 'admin@x.com', false);
 const score = (o = {}) => ({ eventId: 'ev1', teamId: 't2', round: 1, total: 120, gp: 3, hasSignature: true, judgeUid: 'u-judge', ...o });
 
@@ -134,5 +139,46 @@ ok('host can enter official scores for their own events only (create-once), neve
 await assertFails(getDocs(collection(host, 'practice'))); await assertFails(getDocs(collection(host, 'access'))); await assertSucceeds(getDoc(doc(host, 'access/host@x.com')));
 ok('host has no access to practice runs or the access list');
 await assertSucceeds(updateDoc(doc(admin, 'events/ev1'), { name: 'Regional 2026', live: true })); await assertSucceeds(updateDoc(doc(admin, 'teams/t7'), { name: 'Admin edit', number: 7 })); ok('admin still controls everything');
+// host is a modifier: a coach can be host of one event
+await assertSucceeds(updateDoc(doc(coachHost, 'teams/t1'), { name: 'Alpha (renamed by coach-host)' })); await assertSucceeds(updateDoc(doc(coachHost, 'events/ev1'), { teamIds: ['t1'] }));
+await assertSucceeds(setDoc(doc(coachHost, 'teams/t30'), { number: 30, name: 'Thirty', createdBy: 'coachhost@x.com' })); await assertSucceeds(setDoc(doc(coachHost, 'practice/pch'), { uid: 'u-ch', teamId: 't1', total: 60 }));
+await assertFails(updateDoc(doc(coachHost, 'events/ev2'), { teamIds: ['t1'] })); await assertFails(setDoc(doc(coachHost, 'scores/ev2_t1_R1'), score({ eventId: 'ev2', teamId: 't1', judgeUid: 'u-ch' })));
+await assertSucceeds(setDoc(doc(coachHost, 'scores/ev1_t2_R3'), score({ round: 3, judgeUid: 'u-ch' })));
+ok('a coach who is also host of ev1 gets host powers on ev1 only, keeps coach powers, gets nothing on ev2');
+await assertFails(updateDoc(doc(coach, 'events/ev1'), { teamIds: ['t1'] })); await assertFails(setDoc(doc(coach, 'teams/t31'), { number: 31, name: 'No', createdBy: 'coach@x.com' }));
+await assertFails(setDoc(doc(coach, 'access/self@gmail.com'), { role: 'member', teamId: 't1', host: true, addedBy: 'coach@x.com', addedAt: 1 })); await assertFails(updateDoc(doc(coach, 'access/mem@x.com'), { host: true }));
+ok('a plain coach cannot grant host to anyone');
+// hosts add referees/judges
+await assertSucceeds(setDoc(doc(host, 'access/ref1@gmail.com'), { role: 'judge', name: 'Ref One', eventIds: ['ev1'], addedBy: 'host@x.com', addedAt: 1 }));
+await assertSucceeds(setDoc(doc(coachHost, 'access/ref2@gmail.com'), { role: 'judge', eventIds: ['ev1'], addedBy: 'coachhost@x.com', addedAt: 1 }));
+await assertFails(setDoc(doc(host, 'access/ref3@gmail.com'), { role: 'judge', eventIds: ['ev2'], addedBy: 'host@x.com', addedAt: 1 }));
+await assertFails(setDoc(doc(host, 'access/ref4@gmail.com'), { role: 'judge', eventIds: ['ev1', 'ev2'], addedBy: 'host@x.com', addedAt: 1 }));
+await assertFails(setDoc(doc(host, 'access/ref5@gmail.com'), { role: 'judge', addedBy: 'host@x.com', addedAt: 1 }));
+await assertFails(setDoc(doc(host, 'access/ref6@gmail.com'), { role: 'admin', eventIds: ['ev1'], addedBy: 'host@x.com', addedAt: 1 })); await assertFails(setDoc(doc(host, 'access/ref7@gmail.com'), { role: 'host', eventIds: ['ev1'], addedBy: 'host@x.com', addedAt: 1 }));
+await assertFails(setDoc(doc(host, 'access/ref8@gmail.com'), { role: 'judge', eventIds: ['ev1'], addedBy: 'someone@x.com', addedAt: 1 })); await assertFails(setDoc(doc(host, 'access/ref9@gmail.com'), { role: 'judge', eventIds: ['ev1'], addedBy: 'host@x.com', addedAt: 1, host: true }));
+await assertFails(setDoc(doc(host, 'access/scoped@x.com'), { role: 'judge', eventIds: ['ev1'], addedBy: 'host@x.com', addedAt: 1 })); await assertFails(setDoc(doc(host, 'access/admin@x.com'), { role: 'judge', eventIds: ['ev1'], addedBy: 'host@x.com', addedAt: 1 }));
+await assertFails(setDoc(doc(judge, 'access/ref10@gmail.com'), { role: 'judge', eventIds: ['ev1'], addedBy: 'judge@x.com', addedAt: 1 }));
+ok('hosts add ONLY event-limited judges for events they host (not admins/hosts, no extra fields, no takeovers, plain judges can’t)');
+await assertSucceeds(getDocs(query(collection(host, 'access'), where('role', '==', 'judge'), where('addedBy', '==', 'host@x.com')))); await assertFails(getDocs(query(collection(host, 'access'), where('role', '==', 'judge'), where('addedBy', '==', 'host2@x.com')))); await assertFails(getDocs(collection(host, 'access')));
+await assertSucceeds(deleteDoc(doc(host, 'access/ref1@gmail.com'))); await assertFails(deleteDoc(doc(host, 'access/scoped@x.com'))); await assertFails(deleteDoc(doc(host, 'access/judge@x.com'))); await assertFails(updateDoc(doc(host, 'access/ref2@gmail.com'), { eventIds: ['ev1', 'ev2'] }));
+ok('hosts list/remove only the judges they added; cannot widen a judge’s events');
+// event-limited judges
+await assertSucceeds(setDoc(doc(scoped, 'scores/ev2_t1_R1'), score({ eventId: 'ev2', teamId: 't1', judgeUid: 'u-sc' }))); await assertFails(setDoc(doc(scoped, 'scores/ev1_t1_R2'), score({ teamId: 't1', round: 2, judgeUid: 'u-sc' })));
+await assertSucceeds(setDoc(doc(judge, 'scores/ev2_t2_R1'), score({ eventId: 'ev2', judgeUid: 'u-judge' }))); await assertSucceeds(setDoc(doc(admin, 'scores/ev2_t2_R2'), score({ eventId: 'ev2', round: 2, judgeUid: 'u-admin' })));
+ok('event-limited judges can only score their own event; unscoped judges and admins can score any');
+await assertSucceeds(setDoc(doc(admin, 'access/cohost@gmail.com'), { role: 'coach', teamId: 't1', host: true })); await assertSucceeds(updateDoc(doc(admin, 'access/coach@x.com'), { host: true })); ok('admins grant the host flag to anyone');
+// referee is a per-event modifier too (a coach can referee)
+await assertSucceeds(setDoc(doc(host, 'eventJudges/ev1'), { emails: ['coach2@x.com', 'coach@x.com'] })); await assertSucceeds(getDoc(doc(host, 'eventJudges/ev1')));
+await assertFails(setDoc(doc(host, 'eventJudges/ev2'), { emails: ['coach@x.com'] })); await assertFails(setDoc(doc(coach, 'eventJudges/ev1'), { emails: ['coach@x.com', 'mem@x.com'] })); await assertFails(setDoc(doc(judge, 'eventJudges/ev1'), { emails: ['judge@x.com'] }));
+await assertSucceeds(setDoc(doc(admin, 'eventJudges/ev2'), { emails: ['coach2@x.com'] })); await assertFails(setDoc(doc(host, 'eventJudges/ev1'), { emails: 'not-a-list' }));
+ok('admins and an event’s hosts manage that event’s referee list; nobody else can');
+await assertSucceeds(setDoc(doc(coach, 'scores/ev1_t1_R3'), score({ teamId: 't1', round: 3, judgeUid: 'u-coach' }))); await assertFails(setDoc(doc(coach, 'scores/ev2_t1_R1'), score({ eventId: 'ev2', teamId: 't1', judgeUid: 'u-coach' })));
+await assertSucceeds(setDoc(doc(coach, 'signatures/ev1_t1_R3'), { signature: 'data:q' })); await assertSucceeds(getDoc(doc(coach, 'signatures/ev1_t1_R1'))); await assertFails(getDoc(doc(coach, 'signatures/ev2_t1_R1'))); await assertFails(setDoc(doc(coach, 'signatures/ev2_t1_R2'), { signature: 'data:q' }));
+await assertSucceeds(updateDoc(doc(coach, 'teams/t1'), { name: 'Coach still coaches' })); await assertFails(updateDoc(doc(coach, 'events/ev1'), { teamIds: [] }));
+ok('a coach listed as referee of ev1 can score ev1 (+ its signatures) only, and is still just a coach everywhere else');
+await assertSucceeds(getDocs(query(collection(coach, 'eventJudges'), where('emails', 'array-contains', 'coach@x.com')))); await assertFails(getDocs(collection(coach, 'eventJudges'))); await assertFails(getDoc(doc(mem, 'eventJudges/ev1'))); await assertSucceeds(getDocs(collection(admin, 'eventJudges')));
+ok('people can look up the events they referee, but not the lists');
+await assertSucceeds(getDoc(doc(host, 'signatures/ev1_t1_R1'))); await assertFails(getDoc(doc(host2, 'signatures/ev1_t1_R1'))); await assertFails(getDoc(doc(judge2, 'signatures/ev1_t1_R1'))); await assertSucceeds(getDoc(doc(judge, 'signatures/ev1_t1_R1')));
+ok('signatures are visible to an event’s referees/hosts/admins and unscoped judges — not to other events’ staff');
 await env.cleanup();
 console.log(`\n${passed} emulator checks passed`);

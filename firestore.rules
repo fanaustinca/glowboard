@@ -5,9 +5,13 @@ rules_version = '2';
 //
 // Access list: access/{gmail} (document ID = the lowercase Google email) holds { role, teamId?, name?, addedBy }.
 //   admin  → everything. Creates events, picks each event's hosts, grants admin / host / judge / coach by gmail.
-//   host   → runs the events an admin assigned them (eventHosts/{eventId}.emails): adds teams, picks which teams
-//            compete, generates the match schedule, and can enter official scores for those events.
-//   judge  → enters official scores (+ signatures).
+//   host   → NOT a separate person type: a modifier an admin gives someone for specific events
+//            (eventHosts/{eventId}.emails + host:true on their access doc). The same person can also be a coach,
+//            member or judge. Per hosted event they add teams, choose which teams compete, generate the schedule,
+//            add referees/judges for that event and enter official scores.
+//   referee/judge → ALSO a per-event modifier (eventJudges/{eventId}.emails): anyone with an access doc — a coach, a
+//            member — can referee a specific event. The `judge` base role is for people who are only referees
+//            (optional eventIds limits them to those events; none = every event).
 //   coach  → belongs to one team; renames it, adds/removes members of THAT team, practice + stats.
 //   member → belongs to one team; practice + stats.
 // Anyone can read teams, events and official scores (public dashboard). Nobody can write without an access doc.
@@ -33,14 +37,23 @@ service cloud.firestore {
     function isAdmin() {
       return hasAccess() && myRole() == 'admin';
     }
-    function isJudge() {
-      return hasAccess() && (myRole() == 'judge' || myRole() == 'admin');
+    function isRefereeOf(eventId) {
+      return hasAccess()
+        && request.auth.token.email in get(/databases/$(database)/documents/eventJudges/$(eventId)).data.get('emails', []);
     }
+    // May enter official scores for this event: admins, anyone listed as its referee, or a base-role judge
+    // (unscoped = every event; scoped by eventIds = just those).
+    function isJudgeFor(eventId) {
+      return isAdmin() || isRefereeOf(eventId)
+        || (hasAccess() && myRole() == 'judge'
+          && (myDoc().data.get('eventIds', null) == null || eventId in myDoc().data.eventIds));
+    }
+    // "Host" = flagged by an admin (host: true) or the host-only base role.
     function isHostAny() {
-      return hasAccess() && myRole() == 'host';
+      return hasAccess() && (myRole() == 'host' || myDoc().data.get('host', false) == true);
     }
     function isHostOf(eventId) {
-      return isHostAny()
+      return hasAccess()
         && request.auth.token.email in get(/databases/$(database)/documents/eventHosts/$(eventId)).data.get('emails', []);
     }
     function coachOf(teamId) {
@@ -63,8 +76,10 @@ service cloud.firestore {
 
     match /access/{email} {
       allow get: if signedIn()
-        && (request.auth.token.email == email || isAdmin() || coachOf(resource.data.teamId));
-      allow list: if isAdmin() || (hasAccess() && myRole() == 'coach' && resource.data.teamId == myTeam());
+        && (request.auth.token.email == email || isAdmin() || coachOf(resource.data.teamId)
+          || (isHostAny() && resource.data.get('addedBy', '') == request.auth.token.email));
+      allow list: if isAdmin() || (hasAccess() && myRole() == 'coach' && resource.data.teamId == myTeam())
+        || (isHostAny() && resource.data.role == 'judge' && resource.data.addedBy == request.auth.token.email);
       allow create: if (isAdmin()
           && email == email.lower()
           && request.resource.data.role in ['admin', 'host', 'judge', 'coach', 'member']
@@ -73,20 +88,38 @@ service cloud.firestore {
           && email == email.lower()
           && request.resource.data.role == 'member'
           && request.resource.data.keys().hasOnly(['role', 'teamId', 'name', 'addedBy', 'addedAt'])
-          && request.resource.data.addedBy == request.auth.token.email);
+          && request.resource.data.addedBy == request.auth.token.email)
+        || (isHostAny()
+          && email == email.lower()
+          && request.resource.data.role == 'judge'
+          && request.resource.data.keys().hasOnly(['role', 'name', 'addedBy', 'addedAt', 'eventIds'])
+          && request.resource.data.addedBy == request.auth.token.email
+          && request.resource.data.eventIds is list
+          && request.resource.data.eventIds.size() == 1
+          && isHostOf(request.resource.data.eventIds[0]));
       allow update: if isAdmin()
         || (coachOf(resource.data.teamId)
           && resource.data.role == 'member'
           && request.resource.data.role == 'member'
+          && request.resource.data.keys().hasOnly(['role', 'teamId', 'name', 'addedBy', 'addedAt'])
           && request.resource.data.teamId == resource.data.teamId);
       allow delete: if (isAdmin() && request.auth.token.email != email)
-        || (coachOf(resource.data.teamId) && resource.data.role == 'member');
+        || (coachOf(resource.data.teamId) && resource.data.role == 'member')
+        || (isHostAny() && resource.data.role == 'judge' && resource.data.get('addedBy', '') == request.auth.token.email);
     }
 
     // Who hosts which event. Private (hosts' emails are not public): admins, and the hosts listed in the doc.
     match /eventHosts/{eventId} {
       allow get, list: if isAdmin() || (isHostAny() && request.auth.token.email in resource.data.emails);
       allow write: if isAdmin() && request.resource.data.emails is list;
+    }
+
+    // Per-event referees (modifier). Managed by admins and by that event's hosts; each person can see their own entries.
+    match /eventJudges/{eventId} {
+      allow get: if isAdmin() || isHostOf(eventId)
+        || (hasAccess() && request.auth.token.email in resource.data.emails);
+      allow list: if isAdmin() || (hasAccess() && request.auth.token.email in resource.data.emails);
+      allow write: if (isAdmin() || isHostOf(eventId)) && request.resource.data.emails is list;
     }
 
     match /events/{eventId} {
@@ -115,7 +148,7 @@ service cloud.firestore {
 
     match /scores/{scoreId} {
       allow read: if true;
-      allow create: if (isJudge() || isHostOf(request.resource.data.eventId))
+      allow create: if (isJudgeFor(request.resource.data.eventId) || isHostOf(request.resource.data.eventId))
         && request.resource.data.judgeUid == request.auth.uid
         && request.resource.data.eventId is string
         && request.resource.data.teamId is string
@@ -129,10 +162,11 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
-    // Signatures are drawn by (often young) team members: only judges, hosts and admins may read them.
+    // Signatures are drawn by (often young) team members: only that event's referees, hosts and admins may read them.
+    // (the doc id is "<eventId>_<teamId>_R<n>", and event ids contain no underscore)
     match /signatures/{scoreId} {
-      allow read: if isJudge() || isHostAny();
-      allow create: if (isJudge() || isHostAny())
+      allow read: if isJudgeFor(scoreId.split('_')[0]) || isHostOf(scoreId.split('_')[0]);
+      allow create: if (isJudgeFor(scoreId.split('_')[0]) || isHostOf(scoreId.split('_')[0]))
         && request.resource.data.signature is string
         && request.resource.data.signature.size() > 0
         && request.resource.data.signature.size() < 200000;
