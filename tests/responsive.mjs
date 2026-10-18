@@ -164,7 +164,7 @@ await login(page, 'judge@demo.test');
 
 await check('judge nav shows Judge but not Host/Practice/My stats', async () => {
   const links = await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent));
-  assert.deepEqual(links, ['Standings', 'Schedule', 'Judge']);
+  assert.deepEqual(links, ['Standings', 'Schedule', 'Judge', 'Teams']);
 });
 
 const expect = defaultState();
@@ -287,7 +287,7 @@ await check('judges cannot delete scores or touch teams/accounts', async () => {
 await page.evaluate(() => document.getElementById('signout').click());
 await login(page, 'coach@demo.test');
 await check('coach nav shows Practice, Team stats and My team only', async () => {
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Teams']);
 });
 await check('team can save a practice run (no signature needed) and sees it in stats', async () => {
   await goHash(page, 'practice');
@@ -332,18 +332,19 @@ await check('coach: renames their team and adds/removes a member (but cannot tou
   await page.waitForFunction(() => document.querySelector('#t-people').textContent.includes('parent@gmail.com'));
   await page.type('#t-email', 'parent@gmail.com'); await tap(page, '#t-add button');
   await page.waitForFunction(() => !document.getElementById('t-err').hidden);
-  assert.match(await text(page, '#t-err'), /already on your team/);
+  assert.match(await text(page, '#t-err'), /already on this team/);
   const r = await page.evaluate(async () => {
     const { createStore } = await import('./js/store.js'); const s = await createStore(); const out = [];
-    for (const f of [() => s.patch('teams', 't5530', { name: 'Hijack' }), () => s.patch('teams', 't4201', { number: 1 }), () => s.put('access', 'x@gmail.com', { role: 'coach', teamId: 't4201', addedBy: s.user.email }), /* allowed: coaches may add coaches */
-      () => s.put('access', 'y@gmail.com', { role: 'member', teamId: 't5530', addedBy: s.user.email }), () => s.remove('access', 'coach@demo.test')]) {
+    const R = (t, e, role) => ({ teamId: t, email: e, role, name: '', addedBy: s.user.email, addedAt: 1 });
+    for (const f of [() => s.patch('teams', 't5530', { name: 'Hijack' }), () => s.patch('teams', 't4201', { number: 1 }), () => s.put('roster', 't4201__x@gmail.com', R('t4201', 'x@gmail.com', 'coach')), /* allowed: coaches may add coaches */
+      () => s.put('roster', 't5530__y@gmail.com', R('t5530', 'y@gmail.com', 'member')), () => s.remove('roster', 't4201__coach@demo.test'), () => s.put('access', 'w@gmail.com', { role: 'coach', teamId: 't4201', addedBy: s.user.email })]) {
       try { await f(); out.push('allowed'); } catch (e) { out.push(e.code); }
     }
     return out;
   });
-  assert.deepEqual(r, ['permission-denied', 'permission-denied', 'allowed', 'permission-denied', 'permission-denied'], 'a coach can add coaches to their own team — nothing else changes');
+  assert.deepEqual(r, ['permission-denied', 'permission-denied', 'allowed', 'permission-denied', 'permission-denied', 'permission-denied'], 'a coach can add coaches to their own team — nothing else changes');
   page.once('dialog', (d) => d.accept());
-  await page.$eval('[data-rm="parent@gmail.com"]', (e) => e.click());
+  await page.$eval('[data-rm="t4201__parent@gmail.com"]', (e) => e.click());
   await page.waitForFunction(() => !document.querySelector('#t-people').textContent.includes('parent@gmail.com'));
   await shot(page, 'flow-team');
 });
@@ -419,7 +420,7 @@ await check('admin assigns an event host; host manages teams and builds + saves 
   assert.match(await text(page, '#a-users'), /coach@demo\.test[\s\S]*|Coach Casey/); assert.ok((await page.$$('#a-users .live-b')).length >= 1, 'host badge on people list');
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'host@demo.test');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Event']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Teams', 'Event']);
   await goHash(page, 'event');
   assert.match(await text(page, '#ev'), /Season Opener/);
   assert.equal(await page.$('#e-sel'), null, 'host of one event sees only that event');
@@ -486,7 +487,7 @@ await check('team password sign-in (demo): members join with number + password, 
   await join('4201', 'wrong1'); assert.match(await text(page, '#lg-err'), /don’t match/);
   await join('4201', '424242', 'Sam');
   assert.equal(await page.evaluate(() => location.hash), '#/practice');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Teams']);
   await tap(page, '#sc-equip'); await tap(page, '#sc-submit'); await page.waitForSelector('.toast.ok');
   await goHash(page, 'stats'); assert.match(await text(page, '#st'), /Sam/, 'their name is on the run in the shared team history');
   await goHash(page, 'team'); assert.equal(await page.$('#t-add'), null);
@@ -513,7 +514,7 @@ await check('team password sign-in (demo): members join with number + password, 
 await check('coach who is also a host: coach pages + host pages, phone bar = 4 tabs + More, nothing leaks to other events', async () => {
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'cohost@demo.test');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Practice', 'Stats', 'Team', 'Event']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Practice', 'Stats', 'Teams', 'Event']);
   assert.equal(await page.$$eval('#nav > a', (a) => a.length), 4); assert.ok(await page.$('#nav-more'));
   assert.match(await text(page, '#who'), /host/i);
   const box = await page.$eval('#nav', (e) => { const r = e.getBoundingClientRect(); return { bottom: r.bottom, h: innerHeight, items: [...e.children].filter((c) => c.tagName !== 'DIV').map((c) => c.getBoundingClientRect().width) }; });
@@ -533,6 +534,54 @@ await check('coach who is also a host: coach pages + host pages, phone bar = 4 t
     return out;
   });
   assert.deepEqual(r, Array(3).fill('permission-denied'));
+});
+await check('Teams tab (demo): several teams with a role per team, add by number + name + password, colors, password switch, change-password reminder', async () => {
+  await page.evaluate(() => document.getElementById('signout').click());
+  await login(page, 'pro@demo.test');
+  await goHash(page, 'team');
+  const rows = await page.$$eval('#tm-list .trow', (r) => r.map((x) => x.textContent.replace(/\s+/g, ' ')));
+  assert.equal(rows.length, 3, 'coach of two teams + member of a third');
+  assert.ok(rows.filter((t) => /Coach/.test(t)).length === 2 && rows.filter((t) => /Member/.test(t)).length === 1);
+  assert.ok(await page.$('#t-add'), 'coach tools on a team they coach');
+  await tap(page, '[data-use="t4201"]'); await new Promise((r) => setTimeout(r, 300));
+  assert.equal(await page.$('#t-add'), null, 'only a member of 4201 → no coach tools there'); assert.equal(await page.$('#t-pw'), null);
+  await goHash(page, 'practice'); assert.match(await text(page, '.page-title'), /Robo Rangers/); assert.ok(await page.$('#ts'), 'team switcher');
+  await page.select('#ts', 't7742'); await new Promise((r) => setTimeout(r, 300));
+  assert.match(await text(page, '.page-title'), /Canopy Coders/);
+  // add a team with number + name + password
+  await goHash(page, 'team');
+  const add = async (num, nm, pw) => { for (const [sel, v] of [['#tm-num', num], ['#tm-tname', nm], ['#tm-pw', pw]]) { await page.$eval(sel, (e) => { e.value = ''; }); if (v) await page.type(sel, v); } await tap(page, '#tm-add button.primary'); await new Promise((r) => setTimeout(r, 350)); };
+  await add('5530', 'Wrong Name', '000000'); assert.match(await text(page, '#tm-err'), /Team #5530 is called “Byte Me”/);
+  await add('5530', 'Byte Me', '000000'); assert.match(await text(page, '#tm-err'), /don’t match/);
+  const pw5530 = await page.evaluate(async () => { const { createStore } = await import('./js/store.js'); const s = await createStore(); const raw = JSON.parse(localStorage.getItem('glowboard-demo-v2')); return raw.teamSecrets.t5530.password; });
+  await add('5530', 'byte me', pw5530);
+  assert.equal((await page.$$('#tm-list .trow')).length, 4); assert.match(await text(page, '#tm-list .trow.on'), /Byte Me/);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('gb-my-teams')).map((t) => t.teamId)), ['t5530']);
+  await shot(page, 'flow-teams-tab');
+  await page.$eval('[data-leave="t5530"]', (e) => e.click());
+  await page.waitForFunction(() => document.querySelectorAll('#tm-list .trow').length === 3);
+  // colors: up to 3, saved on the team, shown on the public standings
+  if (await page.$('[data-use="t1187"]')) { await tap(page, '[data-use="t1187"]'); await new Promise((r) => setTimeout(r, 300)); }
+  await tap(page, '#t-addcolor'); await tap(page, '#t-addcolor'); assert.equal(await page.$eval('#t-addcolor', (e) => e.disabled), true);
+  assert.equal((await page.$$('#t-colors input[type=color]')).length, 3);
+  await tap(page, '#t-savecolors'); await new Promise((r) => setTimeout(r, 300));
+  assert.equal(await page.evaluate(async () => { const { createStore } = await import('./js/store.js'); const s = await createStore(); return new Promise((res) => { const un = s.subscribe('teams', (r) => { res(r.find((t) => t.id === 't1187').colors.length); }); un(); }); }), 3);
+  await goHash(page, ''); assert.ok(await page.$('.standings .cdots'), 'color dots on the standings');
+  // password switch: ON by default, a coach can turn it off
+  await goHash(page, 'team'); assert.match(await text(page, '#t-pwstate'), /ON/);
+  await tap(page, '#t-pwtoggle'); await page.waitForFunction(() => /OFF/.test(document.querySelector('#t-pwstate').textContent));
+  await page.evaluate(() => document.getElementById('signout').click()); await goHash(page, 'login');
+  for (const [sel, v] of [['#tl-num', '1187'], ['#tl-pw', await page.evaluate(() => JSON.parse(localStorage.getItem('glowboard-demo-v2')).teamSecrets.t1187.password)], ['#tl-name', '']]) { await page.$eval(sel, (e) => { e.value = ''; }); if (v) await page.type(sel, v); }
+  await tap(page, '#tl button'); await new Promise((r) => setTimeout(r, 300));
+  assert.match(await text(page, '#lg-err'), /turned password sign-in off/);
+  // change-password reminder: a freshly created team still has the generated code
+  await page.evaluate(() => { const k = 'glowboard-demo-v2'; const d = JSON.parse(localStorage.getItem(k)); d.teamSecrets.t1187.enabled = true; d.teamSecrets.t7742.isDefault = true; localStorage.setItem(k, JSON.stringify(d)); sessionStorage.removeItem('gb-pw-prompted'); });
+  await page.reload({ waitUntil: 'networkidle0' });
+  await login(page, 'pro@demo.test');
+  await page.waitForSelector('dialog[open] [data-pwchange]', { timeout: 4000 });
+  assert.match(await text(page, 'dialog[open]'), /Please change your team password[\s\S]*Canopy Coders/); await shot(page, 'flow-pw-reminder');
+  await page.$eval('dialog [data-pwkeep]', (e) => e.click()); await page.waitForFunction(() => !document.querySelector('dialog[open]'));
+  await page.evaluate(() => document.getElementById('signout').click());
 });
 await check('theme toggle switches and persists', async () => {
   await page.$eval('#theme', (e) => e.click());

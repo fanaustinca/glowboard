@@ -7,7 +7,6 @@ import { MISSIONS, MATCHES_PER_TEAM } from './missions.js';
 
 export const ROLES = ['admin', 'host', 'judge', 'coach', 'member'];
 export const ROLE_LABEL = { admin: 'Admin', host: 'Event host', judge: 'Judge', coach: 'Coach', member: 'Team member' };
-export const isTeamSide = (role) => role === 'coach' || role === 'member';
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Events a signed-in user may run: admins all of them; anyone else only the events whose eventHosts list has their
 // email (host is a per-event modifier — a coach or judge can be a host too). eventHosts rows are { id: eventId, emails }.
@@ -23,7 +22,35 @@ export const scoringEvents = (user, events, eventHosts, eventJudges = []) => {
   const own = user.role === 'judge' ? (user.eventIds ? events.filter((e) => user.eventIds.includes(e.id)) : events) : [];
   return [...new Map([...own, ...hostedEvents(user, events, eventHosts), ...refereedEvents(user, events, eventJudges)].map((e) => [e.id, e])).values()];
 };
-export const hasRole = (u, r) => Boolean(u) && (r === 'host' ? u.host : u.role === r);
+// Pseudo-roles: 'host' = host of ≥1 event, 'team' = on ≥1 team, 'signedin' = anyone signed in.
+export const hasRole = (u, r) => Boolean(u) && (r === 'host' ? u.host : r === 'team' ? Boolean(u.teams?.length) : r === 'signedin' ? true : u.role === r);
+// A person can be on many teams, with a role per team (coach only where the roster says so).
+export const isCoachOn = (u, teamId) => Boolean(u?.teams?.some((t) => t.teamId === teamId && t.role === 'coach'));
+export const coachTeamIds = (u) => (u?.teams || []).filter((t) => t.role === 'coach').map((t) => t.teamId);
+export const rosterId = (teamId, email) => `${teamId}__${email}`;
+export const memberDocId = (uid, teamId) => `${uid}_${teamId}`;
+const ACTIVE_KEY = 'gb-active-team', LOCAL_TEAMS_KEY = 'gb-my-teams';
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* private mode */ } };
+// Teams added with a team password are remembered on this device ([{teamId, password, name}]) and linked to the Google account on sign-in.
+export const localTeams = () => { try { return JSON.parse(lsGet(LOCAL_TEAMS_KEY)) || []; } catch { return []; } };
+export const setLocalTeams = (list) => lsSet(LOCAL_TEAMS_KEY, JSON.stringify(list));
+export const rememberTeam = (e) => setLocalTeams([...localTeams().filter((x) => x.teamId !== e.teamId), e]);
+export const forgetTeam = (teamId) => setLocalTeams(localTeams().filter((x) => x.teamId !== teamId));
+
+// base = account facts; roster rows = {teamId, role} from the Google account; pw rows = valid team-password memberships.
+// A coach/member base role is just a label: the real role is per team.
+export function composeUser(base, rosterRows, pwRows) {
+  const teams = [];
+  for (const r of rosterRows) teams.push({ teamId: r.teamId, role: r.role === 'coach' ? 'coach' : 'member', via: 'roster', docId: r.id });
+  for (const r of pwRows) if (!teams.some((t) => t.teamId === r.teamId)) teams.push({ teamId: r.teamId, role: 'member', via: 'password', docId: r.id });
+  const pref = lsGet(ACTIVE_KEY);
+  const active = teams.find((t) => t.teamId === pref) || teams.find((t) => t.role === 'coach') || teams[0] || null;
+  const role = ['coach', 'member'].includes(base.role) ? (teams.some((t) => t.role === 'coach') ? 'coach' : 'member') : base.role;
+  const name = base.viaPassword ? (pwRows.find((r) => r.name)?.name || base.name) : base.name;
+  return { ...base, name, role, teams, teamId: active?.teamId || null, teamRole: active?.role || null };
+}
+export function setActivePref(teamId) { lsSet(ACTIVE_KEY, teamId); }
 export const normEmail = (e) => String(e || '').trim().toLowerCase();
 export const scoreId = (eventId, teamId, round) => `${eventId}_${teamId}_R${round}`;
 export const eventTeams = (ev, teams) => (ev?.teamIds?.length ? teams.filter((t) => ev.teamIds.includes(t.id)) : teams);
@@ -33,7 +60,7 @@ const denied = (m) => err('permission-denied', m || 'Missing or insufficient per
 
 // ───────────────────────────── Demo backend ─────────────────────────────
 const KEY = 'glowboard-demo-v2';
-const COLS = ['teams', 'events', 'eventHosts', 'eventJudges', 'teamSecrets', 'teamMembers', 'scores', 'signatures', 'practice', 'access'];
+const COLS = ['teams', 'events', 'eventHosts', 'eventJudges', 'teamSecrets', 'teamMembers', 'roster', 'scores', 'signatures', 'practice', 'access'];
 
 function mulberry(seed) { return () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -67,14 +94,17 @@ const DEMO_TEAMS = [
   [4201, 'Robo Rangers'], [5530, 'Byte Me'], [1187, 'Gear Gliders'], [7742, 'Canopy Coders'],
   [3099, 'Moss Machines'], [6014, 'The Leaf Lords'], [2468, 'Spore Squad'], [9120, 'Vine Divers'],
 ];
+// `teams` = this person's roster entries ([teamId, role]); a person can be on many teams, with a role per team.
 export const DEMO_ACCOUNTS = [
-  { email: 'admin@demo.test', role: 'admin', name: 'Dana (admin)' },
+  { email: 'admin@demo.test', role: 'admin', name: 'Dana (admin)', teams: [['t3099', 'coach']] },
   { email: 'host@demo.test', role: 'host', name: 'Harper (host)' },
-  { email: 'cohost@demo.test', role: 'coach', teamId: 't5530', host: true, name: 'Coach Cam (also host)' },
+  { email: 'cohost@demo.test', role: 'coach', teamId: 't5530', host: true, name: 'Coach Cam (also host)', teams: [['t5530', 'coach']] },
   { email: 'judge@demo.test', role: 'judge', name: 'Jo (judge)' },
-  { email: 'coach@demo.test', role: 'coach', teamId: 't4201', name: 'Coach Casey' },
-  { email: 'member@demo.test', role: 'member', teamId: 't4201', name: 'Sam (parent)' },
+  { email: 'coach@demo.test', role: 'coach', teamId: 't4201', name: 'Coach Casey', teams: [['t4201', 'coach']] },
+  { email: 'pro@demo.test', role: 'coach', teamId: 't1187', name: 'Coach Pat (3 teams)', teams: [['t1187', 'coach'], ['t7742', 'coach'], ['t4201', 'member']] },
+  { email: 'member@demo.test', role: 'member', teamId: 't4201', name: 'Sam (parent)', teams: [['t4201', 'member']] },
 ];
+const DEMO_COLORS = { t4201: ['#1a9e6b', '#f4c20d'], t5530: ['#6c4bd1', '#12b5cb', '#ff7a45'], t1187: ['#e5484d'] };
 
 function seedDemo() {
   const rand = mulberry(2026);
@@ -85,8 +115,8 @@ function seedDemo() {
   db.eventHosts[E2] = { id: E2, emails: ['host@demo.test', 'cohost@demo.test'] };
   DEMO_TEAMS.forEach(([number, name], i) => {
     const id = `t${number}`;
-    db.teams[id] = { id, number, name, createdBy: 'demo' };
-    db.teamSecrets[id] = { id, password: number === 4201 ? '424242' : String(100000 + ((number * 7919) % 900000)), updatedBy: 'demo', updatedAt: 1 };
+    db.teams[id] = { id, number, name, createdBy: 'demo', ...(DEMO_COLORS[id] ? { colors: DEMO_COLORS[id] } : {}) };
+    db.teamSecrets[id] = { id, password: number === 4201 ? '424242' : String(100000 + ((number * 7919) % 900000)), enabled: true, isDefault: false, updatedBy: 'demo', updatedAt: 1 };
     const skill = 0.35 + (i % 4) * 0.12 + rand() * 0.15;
     const rounds = i === 7 ? 0 : (i % 3 === 0 ? 2 : 3);
     for (let r = 1; r <= rounds; r++) {
@@ -106,7 +136,10 @@ function seedDemo() {
       db.practice[pid] = { id: pid, uid: 'coach@demo.test', by: 'Coach Casey', teamId: id, total: res.total, state: res.state, result: slim(res), createdAt: Date.now() - (6 - k) * 86400e3 };
     }
   });
-  DEMO_ACCOUNTS.forEach((a) => { db.access[a.email] = { id: a.email, ...a, addedBy: 'demo' }; });
+  DEMO_ACCOUNTS.forEach(({ teams = [], ...a }) => {
+    db.access[a.email] = { id: a.email, ...a, addedBy: 'demo' };
+    teams.forEach(([teamId, role]) => { const rid = rosterId(teamId, a.email); db.roster[rid] = { id: rid, teamId, email: a.email, role, name: a.name, addedBy: 'demo', addedAt: 1 }; });
+  });
   return db;
 }
 
@@ -136,53 +169,91 @@ class DemoStore {
   async init() { this.emitAuth(); }
 
   // ----- auth -----
+  secretOk(row) { const sec = this.db.teamSecrets[row.teamId]; return Boolean(sec) && sec.password === row.password && sec.enabled !== false; }
+  pwRows(uid) { return Object.values(this.db.teamMembers).filter((m) => m.uid === uid && this.secretOk(m)); }
   get user() {
-    const m = this.db.teamMembers[this.session];
-    if (m) { // team-password member: valid only while the team's password is unchanged
-      if (this.db.teamSecrets[m.teamId]?.password !== m.password) return null;
-      return { uid: m.id, email: null, name: m.name || 'Team member', role: 'member', teamId: m.teamId, host: false, eventIds: null, viaPassword: true };
+    const s = this.session;
+    if (!s) return null;
+    if (s.startsWith('pw-')) { // anonymous team-password session: only the memberships whose password still matches count
+      const rows = this.pwRows(s);
+      if (!rows.length) return null;
+      return composeUser({ uid: s, email: null, name: rows.find((r) => r.name)?.name || 'Team member', role: 'member', host: false, eventIds: null, viaPassword: true }, [], rows);
     }
-    const a = this.db.access[this.session];
-    return a ? { uid: a.id, email: a.id, name: a.name || a.id.split('@')[0], role: a.role, teamId: a.teamId || null, host: a.role === 'host' || a.host === true, eventIds: a.eventIds || null } : null;
+    const a = this.db.access[s];
+    if (!a) return null;
+    return composeUser({ uid: a.id, email: a.id, name: a.name || a.id.split('@')[0], role: a.role, host: a.role === 'host' || a.host === true, eventIds: a.eventIds || null },
+      Object.values(this.db.roster).filter((r) => r.email === s), this.pwRows(s));
   }
   emitAuth() { const u = this.user; this.authListeners.forEach((f) => f(u)); }
   onAuth(cb) { this.authListeners.add(cb); cb(this.user); return () => this.authListeners.delete(cb); }
+  setSession(id) {
+    this.session = id;
+    try { id ? sessionStorage.setItem(KEY + '-session', id) : sessionStorage.removeItem(KEY + '-session'); } catch { /* ignore */ }
+  }
   async signInAs(email) {
     const e = normEmail(email);
     if (!this.db.access[e]) throw err('not-authorized', `${e} isn’t on the access list. Ask your coach or an admin to add this Google account.`);
-    this.session = e;
-    try { sessionStorage.setItem(KEY + '-session', e); } catch { /* ignore */ }
+    this.setSession(e);
+    await this.syncLocalTeams();
     this.emitAuth();
   }
-  async signInTeam(number, password, name = '') {
+  setActiveTeam(teamId) { setActivePref(teamId); this.emitAuth(); }
+  // Add a team with its shared password. Stored on this device and — signed in with Google — linked to the account.
+  async joinTeam(number, password, name = '') {
     const teamId = `t${parseInt(number, 10)}`;
     const secret = this.db.teamSecrets[teamId];
-    if (!secret || secret.password !== String(password).trim()) throw err('bad-team-login', 'That team number and password don’t match.');
-    const id = `pw-${Math.random().toString(36).slice(2, 10)}`;
-    this.db.teamMembers[id] = { id, teamId, password: secret.password, name: String(name).trim().slice(0, 40), createdAt: Date.now() };
-    this.session = id;
-    try { sessionStorage.setItem(KEY + '-session', id); } catch { /* ignore */ }
+    if (!this.db.teams[teamId] || !secret || secret.enabled === false || secret.password !== String(password).trim()) throw err('bad-team-login', 'That team number and password don’t match — or the coach has turned password sign-in off.');
+    if (!this.session) this.setSession(`pw-${Math.random().toString(36).slice(2, 10)}`);
+    const uid = this.session, id = memberDocId(uid, teamId);
+    this.db.teamMembers[id] = { id, uid, teamId, password: secret.password, name: String(name).trim().slice(0, 40), createdAt: Date.now() };
+    rememberTeam({ teamId, password: secret.password, name: String(name).trim().slice(0, 40) });
     this.persist(); this.emit(); this.emitAuth();
     return this.user;
   }
+  async signInTeam(number, password, name = '') {
+    if (this.session && !this.session.startsWith('pw-')) this.setSession(null);
+    return this.joinTeam(number, password, name);
+  }
+  // Link the teams remembered on this device to the Google account (silently drops the ones whose password changed).
+  async syncLocalTeams() {
+    for (const t of localTeams()) {
+      const sec = this.db.teamSecrets[t.teamId];
+      if (!sec || sec.password !== t.password || sec.enabled === false) { forgetTeam(t.teamId); continue; }
+      const id = memberDocId(this.session, t.teamId);
+      if (!this.db.teamMembers[id] && !this.db.roster[rosterId(t.teamId, this.session)]) this.db.teamMembers[id] = { id, uid: this.session, teamId: t.teamId, password: t.password, name: t.name || '', createdAt: Date.now() };
+    }
+    this.persist(); this.emit();
+  }
+  async leaveTeam(teamId) {
+    const u = this.user; if (!u) return;
+    const t = u.teams.find((x) => x.teamId === teamId); if (!t) return;
+    if (t.role === 'coach') throw denied('Coaches can’t leave their own team — ask another coach or an admin to remove you.');
+    delete this.db.teamMembers[memberDocId(u.uid, teamId)];
+    if (t.via === 'roster') delete this.db.roster[rosterId(teamId, u.email)];
+    forgetTeam(teamId);
+    this.persist(); this.emit(); this.emitAuth();
+  }
   async signOut() {
-    if (this.db.teamMembers[this.session]) { delete this.db.teamMembers[this.session]; this.persist(); this.emit(); }
-    this.session = null;
-    try { sessionStorage.removeItem(KEY + '-session'); } catch { /* ignore */ }
+    if (this.session?.startsWith('pw-')) { Object.values(this.db.teamMembers).filter((m) => m.uid === this.session).forEach((m) => delete this.db.teamMembers[m.id]); setLocalTeams([]); this.persist(); this.emit(); }
+    this.setSession(null);
     this.emitAuth();
   }
 
   // ----- rules (mirrors firestore.rules) -----
   need(pred) { const u = this.user; if (!u || !pred(u)) throw denied(); return u; }
   isAdmin(u) { return u?.role === 'admin'; }
-  coachOf(u, teamId) { return u?.role === 'coach' && u.teamId === teamId; }
-  onTeam(u, teamId) { return isTeamSide(u?.role) && u.teamId === teamId; }
+  coachOf(u, teamId) { return Boolean(u?.email) && isCoachOn(u, teamId); }
+  onTeam(u, teamId) { return Boolean(u?.teams?.some((t) => t.teamId === teamId)); }
   isHost(u) { return Boolean(u?.host); }
   canSecret(u, teamId) { return this.isAdmin(u) || this.coachOf(u, teamId) || (this.isHost(u) && this.db.teams[teamId]?.createdBy === u.email); }
   refereeOf(u, eventId) { return Boolean(u) && (this.db.eventJudges[eventId]?.emails || []).includes(u.email); }
   judgeFor(u, eventId) { return this.isAdmin(u) || this.refereeOf(u, eventId) || (u?.role === 'judge' && (!u.eventIds || u.eventIds.includes(eventId))); }
   hostOf(u, eventId) { return this.isHost(u) && (this.db.eventHosts[eventId]?.emails || []).includes(u.email); }
-  validTeam(d) { return Number.isInteger(d.number) && d.number > 0 && typeof d.name === 'string' && d.name.length > 0 && d.name.length <= 60; }
+  validTeam(d) {
+    const c = d.colors ?? [];
+    return Number.isInteger(d.number) && d.number > 0 && typeof d.name === 'string' && d.name.length > 0 && d.name.length <= 60
+      && Array.isArray(c) && c.length <= 3 && c.every((x) => /^#[0-9a-fA-F]{6}$/.test(x));
+  }
 
   // ----- data -----
   subscribe(col, cb) {
@@ -191,11 +262,12 @@ class DemoStore {
       let rows = Object.values(this.db[col] || {});
       if (col === 'signatures') rows = [];
       if (col === 'teamSecrets') rows = [];
-      if (col === 'teamMembers') rows = this.isAdmin(u) ? rows : (u?.role === 'coach' ? rows.filter((r) => r.teamId === u.teamId) : []);
+      if (col === 'teamMembers') rows = this.isAdmin(u) ? rows : rows.filter((r) => u && (r.uid === u.uid || this.coachOf(u, r.teamId)));
+      if (col === 'roster') rows = this.isAdmin(u) ? rows : rows.filter((r) => u?.email && (r.email === u.email || this.coachOf(u, r.teamId)));
       if (col === 'eventJudges') rows = this.isAdmin(u) ? rows : rows.filter((r) => u && (r.emails || []).includes(u.email));
       if (col === 'eventHosts') rows = this.isAdmin(u) ? rows : (u?.host ? rows.filter((r) => (r.emails || []).includes(u.email)) : []);
-      if (col === 'access') rows = this.isAdmin(u) ? rows : rows.filter((r) => (u?.role === 'coach' && r.teamId === u.teamId) || (u?.host && r.role === 'judge' && r.addedBy === u.email));
-      if (col === 'practice') rows = this.isAdmin(u) ? rows : (isTeamSide(u?.role) ? rows.filter((r) => r.teamId === u.teamId) : []);
+      if (col === 'access') rows = this.isAdmin(u) ? rows : rows.filter((r) => u?.host && r.role === 'judge' && r.addedBy === u.email);
+      if (col === 'practice') rows = this.isAdmin(u) ? rows : rows.filter((r) => this.onTeam(u, r.teamId));
       cb(rows.map((r) => ({ ...r })));
     };
     this.listeners.add(run);
@@ -210,7 +282,8 @@ class DemoStore {
         if (!ROLES.includes(data.role) || (['coach', 'member'].includes(data.role) && typeof data.teamId !== 'string')) throw denied();
         if (id === u.email && data.role !== 'admin') throw denied('You can’t remove your own admin access.');
       } else {
-        const asCoach = this.coachOf(u, data.teamId) && ['member', 'coach'].includes(data.role) && (!ex || (ex.role === 'member' && data.role === 'member' && ex.teamId === data.teamId)) && data.addedBy === u?.email
+        // a coach adds a brand-new person (as a plain member); who is on the team is the roster's business
+        const asCoach = !ex && this.coachOf(u, data.teamId) && data.role === 'member' && data.addedBy === u?.email
           && Object.keys(data).every((k) => ['role', 'teamId', 'name', 'addedBy', 'addedAt'].includes(k));
         // hosts add referees limited to ONE event they host
         const asHost = this.isHost(u) && !ex && data.role === 'judge' && data.addedBy === u.email && Array.isArray(data.eventIds) && data.eventIds.length === 1 && this.hostOf(u, data.eventIds[0])
@@ -220,6 +293,14 @@ class DemoStore {
           && Object.keys(data).every((k) => ['role', 'teamId', 'name', 'addedBy', 'addedAt'].includes(k));
         if (!asCoach && !asHost && !asTeamHost) throw denied();
       }
+    } else if (col === 'roster') {
+      const okKeys = Object.keys(data).every((k) => ['teamId', 'email', 'role', 'name', 'addedBy', 'addedAt'].includes(k));
+      if (!u?.email || !okKeys || typeof data.teamId !== 'string' || id !== rosterId(data.teamId, data.email) || data.email !== data.email.toLowerCase()
+        || !['member', 'coach'].includes(data.role) || data.addedBy !== u.email || !this.db.teams[data.teamId]) throw denied();
+      if (ex) { if (!(this.isAdmin(u) || (this.coachOf(u, ex.teamId) && ex.role === 'member' && data.role === 'member' && data.teamId === ex.teamId))) throw denied(); }
+      else if (!(this.isAdmin(u) || this.coachOf(u, data.teamId) || (this.isHost(u) && this.db.teams[data.teamId].createdBy === u.email && data.role === 'coach'))) throw denied();
+    } else if (col === 'teamMembers') {
+      throw denied(); // joining goes through joinTeam()
     } else if (col === 'teams') {
       if (!(this.isAdmin(u) || (this.isHost(u) && !ex && data.createdBy === u.email))) throw denied();
       if (!this.validTeam(data) || id !== `t${data.number}`) throw err('invalid', 'A team needs a number and a name.');
@@ -227,6 +308,7 @@ class DemoStore {
     } else if (col === 'teamSecrets') {
       this.need((x) => this.canSecret(x, id));
       if (typeof data.password !== 'string' || data.password.length < 6 || data.password.length > 64) throw err('invalid', 'The team password needs at least 6 characters.');
+      if (!Object.keys(data).every((k) => ['password', 'updatedBy', 'updatedAt', 'enabled', 'isDefault'].includes(k)) || data.updatedBy !== u.email) throw denied();
     } else if (col === 'eventJudges') {
       this.need((x) => this.isAdmin(x) || this.hostOf(x, id));
       if (!Array.isArray(data.emails)) throw err('invalid', 'emails must be a list.');
@@ -242,7 +324,7 @@ class DemoStore {
       else if (data.judgeUid !== u.uid || data.hasSignature !== true || ![2, 3, 4].includes(data.gp) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1000)) throw denied();
       if (!this.db.events[data.eventId] || !this.db.teams[data.teamId] || ![1, 2, 3].includes(data.round) || id !== scoreId(data.eventId, data.teamId, data.round)) throw denied();
     } else if (col === 'practice') {
-      if (!this.onTeam(u, data.teamId) || data.uid !== u.uid || ex) throw denied();
+      if (!this.onTeam(u, data.teamId) || data.uid !== u.uid || ex || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1000)) throw denied();
     } else throw denied();
     this.db[col][id] = { ...data, id };
     this.persist(); this.emit();
@@ -252,8 +334,9 @@ class DemoStore {
     if (!ex) throw err('not-found', 'Not found.');
     if (col === 'teams') {
       const nameOnly = Object.keys(fields).every((k) => k === 'name');
-      if (!(this.isAdmin(u) || (this.coachOf(u, id) && nameOnly) || (this.isHost(u) && ex.createdBy === u.email && nameOnly))) throw denied();
-      if (!this.validTeam({ ...ex, ...fields })) throw err('invalid', 'A team needs a number and a name (max 60 characters).');
+      const nameColors = Object.keys(fields).every((k) => ['name', 'colors'].includes(k));
+      if (!(this.isAdmin(u) || (this.coachOf(u, id) && nameColors) || (this.isHost(u) && ex.createdBy === u.email && nameOnly))) throw denied();
+      if (!this.validTeam({ ...ex, ...fields })) throw err('invalid', 'A team needs a number and a name (max 60 characters), and up to 3 valid colors.');
     } else if (col === 'events') {
       if (!this.isAdmin(u)) { // hosts may only touch the team list and schedule of events they host
         if (!(this.hostOf(u, id) && Object.keys(fields).every((k) => ['teamIds', 'schedule'].includes(k)))) throw denied();
@@ -280,16 +363,18 @@ class DemoStore {
   async remove(col, id) {
     const u = this.user, row = this.db[col][id];
     if (col === 'access') {
-      const ok = (this.isAdmin(u) && id !== u.email) || (this.coachOf(u, row?.teamId) && row?.role === 'member')
-        || (this.coachOf(u, row?.teamId) && row?.role === 'coach' && row.addedBy === u.email && id !== u.email)
-        || (this.isHost(u) && row?.role === 'judge' && row.addedBy === u.email);
+      const ok = (this.isAdmin(u) && id !== u.email) || (this.isHost(u) && row?.role === 'judge' && row.addedBy === u.email);
       if (!ok) throw denied(id === u?.email ? 'You can’t remove your own access.' : undefined);
+    } else if (col === 'roster') {
+      const ok = this.isAdmin(u) || (this.coachOf(u, row?.teamId) && (row.role === 'member' || (row.role === 'coach' && row.addedBy === u.email && row.email !== u.email)))
+        || (u?.email && row?.email === u.email && row.role === 'member');
+      if (!ok) throw denied();
     } else if (col === 'practice') {
       if (!(this.isAdmin(u) || this.coachOf(u, row?.teamId) || (this.onTeam(u, row?.teamId) && row.uid === u.uid))) throw denied();
     } else if (col === 'teams') {
       if (!(this.isAdmin(u) || (this.isHost(u) && row?.createdBy === u.email))) throw denied();
     } else if (col === 'teamMembers') {
-      if (!(this.isAdmin(u) || this.coachOf(u, row?.teamId) || (u && u.uid === id))) throw denied();
+      if (!(this.isAdmin(u) || this.coachOf(u, row?.teamId) || (u && row?.uid === u.uid))) throw denied();
     } else if (col === 'eventJudges') this.need((x) => this.isAdmin(x) || this.hostOf(x, id));
     else if (['events', 'eventHosts', 'scores'].includes(col)) this.need(this.isAdmin);
     else throw denied();
@@ -297,7 +382,7 @@ class DemoStore {
     if (col === 'scores') delete this.db.signatures[id];
     this.persist(); this.emit();
   }
-  async resetDemo() { this.need(this.isAdmin); this.db = seedDemo(); this.session = 'admin@demo.test'; this.persist(); this.emit(); this.emitAuth(); }
+  async resetDemo() { this.need(this.isAdmin); this.db = seedDemo(); this.setSession('admin@demo.test'); this.persist(); this.emit(); this.emitAuth(); }
   newId(prefix = 'x') { return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; }
 }
 
@@ -315,24 +400,19 @@ class FirebaseStore {
     this.auth = auth.getAuth(this.fapp);
     this.fdb = fs.getFirestore(this.fapp);
     auth.onAuthStateChanged(this.auth, async (fu) => {
-      if (!fu) { this.cur = null; return this.emitAuth(); }
-      if (fu.isAnonymous && this.joining) return; // signInTeam finishes the sign-in itself
-      const prof = await this.fetchProfile(fu).catch(() => null);
-      // Signed in with Google but not on the access list → no permissions at all: sign straight back out.
-      if (!prof) { this.cur = null; this.emitAuth(); auth.signOut(this.auth).catch(() => {}); return; }
+      if (!fu) { this.detach(); this.cur = null; return this.emitAuth(); }
+      if (fu.isAnonymous && this.joining) return; // joinTeam finishes the sign-in itself
+      const prof = await this.attach(fu).catch(() => null);
+      // Signed in with Google but not on the access list (or an anonymous session with no team) → no permissions: sign back out.
+      if (!prof) { this.detach(); this.cur = null; this.emitAuth(); auth.signOut(this.auth).catch(() => {}); return; }
       this.cur = prof;
       this.emitAuth();
     });
   }
+  // Account facts only; the teams come from attach().
   async fetchProfile(fu) {
     const { fs } = this.sdk;
-    if (fu.isAnonymous) { // team-password session: the teamMembers/{uid} doc says which team
-      try {
-        const m = await fs.getDoc(fs.doc(this.fdb, 'teamMembers', fu.uid));
-        if (!m.exists()) return null;
-        return { uid: fu.uid, email: null, name: m.data().name || 'Team member', role: 'member', teamId: m.data().teamId, host: false, eventIds: null, viaPassword: true };
-      } catch { return null; }
-    }
+    if (fu.isAnonymous) return { uid: fu.uid, email: null, name: 'Team member', role: 'member', host: false, eventIds: null, viaPassword: true };
     const email = normEmail(fu.email);
     let d;
     try { d = await fs.getDoc(fs.doc(this.fdb, 'access', email)); } catch (e) {
@@ -343,46 +423,138 @@ class FirebaseStore {
     }
     if (!d.exists()) return null;
     const a = d.data();
-    return { uid: fu.uid, email, name: a.name || email.split('@')[0], role: a.role, teamId: a.teamId || null, host: a.role === 'host' || a.host === true, eventIds: a.eventIds || null };
+    return { uid: fu.uid, email, name: a.name || email.split('@')[0], role: a.role, host: a.role === 'host' || a.host === true, eventIds: a.eventIds || null };
+  }
+  // Load the account, then keep its team memberships live: roster rows (a coach added you) + team-password memberships.
+  attach(fu) {
+    if (this.attached?.uid === fu.uid) return this.attached.promise;
+    this.detach();
+    const { fs } = this.sdk;
+    const promise = (async () => {
+      const base = await this.fetchProfile(fu);
+      if (!base) return null;
+      this.base = base; this.rows = { roster: [], pw: [] };
+      const recompute = () => { this.cur = composeUser(this.base, this.rows.roster, this.rows.pw); };
+      await new Promise((resolve) => {
+        let left = base.email ? 2 : 1;
+        const first = () => { if (--left === 0) resolve(); };
+        const watch = (key, q) => {
+          let got = false;
+          const unsub = fs.onSnapshot(q, (snap) => {
+            this.rows[key] = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+            if (!got) { got = true; first(); return; }
+            recompute(); this.emitAuth();
+          }, (e) => { console.warn(`[firestore] my ${key}:`, e.code); if (!got) { got = true; first(); } });
+          this.unsubs.push(unsub);
+        };
+        this.unsubs = [];
+        if (base.email) watch('roster', fs.query(fs.collection(this.fdb, 'roster'), fs.where('email', '==', base.email)));
+        watch('pw', fs.query(fs.collection(this.fdb, 'teamMembers'), fs.where('uid', '==', fu.uid)));
+      });
+      recompute();
+      if (!fu.isAnonymous) this.syncLocalTeams().catch(() => {});
+      await this.dropStale();
+      if (fu.isAnonymous && !this.cur.teams.length) return null;
+      recompute();
+      return this.cur;
+    })();
+    this.attached = { uid: fu.uid, promise };
+    const forget = () => { if (this.attached?.promise === promise) this.attached = null; };
+    promise.then((p) => { if (!p) forget(); }, forget); // (a failed or refused sign-in can be retried)
+    return promise;
+  }
+  detach() { (this.unsubs || []).forEach((f) => f()); this.unsubs = []; this.attached = null; this.base = null; }
+  // A team-password membership is stale once the coach changed or switched off the password: delete it.
+  async dropStale() {
+    const { fs } = this.sdk;
+    for (const m of this.rows.pw.slice()) {
+      if (this.rows.roster.some((r) => r.teamId === m.teamId)) continue;
+      try { await fs.getDocs(fs.query(fs.collection(this.fdb, 'practice'), fs.where('teamId', '==', m.teamId), fs.limit(1))); } catch (e) {
+        if (e.code !== 'permission-denied') continue;
+        this.rows.pw = this.rows.pw.filter((x) => x.id !== m.id); forgetTeam(m.teamId);
+        this.notice = 'The team password for #' + m.teamId.slice(1) + ' was changed or turned off, so you were removed from that team. Add it again with the new password.';
+        fs.deleteDoc(fs.doc(this.fdb, 'teamMembers', m.id)).catch(() => {});
+      }
+    }
+  }
+  // A team's password was changed or switched off while someone was using it: drop that membership (or sign out).
+  async recheck() {
+    if (this.rechecking || !this.base) return;
+    this.rechecking = true;
+    try {
+      await this.dropStale();
+      this.cur = composeUser(this.base, this.rows.roster, this.rows.pw);
+      if (this.base.viaPassword && !this.cur.teams.length) { this.notice = this.notice || 'The team password was changed. Sign in again with the new password.'; await this.signOut(); return; }
+      this.emitAuth();
+    } finally { this.rechecking = false; }
   }
   get user() { return this.cur; }
   emitAuth() { this.authListeners.forEach((f) => f(this.cur)); }
   onAuth(cb) { this.authListeners.add(cb); cb(this.cur); return () => this.authListeners.delete(cb); }
+  setActiveTeam(teamId) { setActivePref(teamId); if (this.base) { this.cur = composeUser(this.base, this.rows.roster, this.rows.pw); this.emitAuth(); } }
   async signInGoogle() {
     const { auth } = this.sdk;
     let cred;
     try { cred = await auth.signInWithPopup(this.auth, new auth.GoogleAuthProvider()); } catch (e) { throw friendly(e); }
     const email = normEmail(cred.user.email);
-    const prof = await this.fetchProfile(cred.user);
+    const prof = await this.attach(cred.user);
     if (!prof) throw err('not-authorized', `${email} isn’t on the access list. Ask your coach or an admin to add this Google account, then sign in again. (First admin? In Firestore create collection “access”, Document ID exactly “${email}”, field role = admin.)`);
+    this.cur = prof; this.emitAuth();
     return prof;
   }
-  // Team password: an anonymous session + a teamMembers/{uid} doc carrying the password; the rules compare it with the team's.
-  async signInTeam(number, password, name = '') {
+  // Add a team with its shared password (anonymous sign-in first if nobody is signed in). Stored on this device and,
+  // with a Google account, linked to it: the membership doc lives under the account's uid.
+  async joinTeam(number, password, name = '') {
     const { auth, fs } = this.sdk;
     const teamId = `t${parseInt(number, 10)}`;
+    const pw = String(password).trim(), nm = String(name).trim().slice(0, 40);
+    const fresh = !this.auth.currentUser;
     this.joining = true;
     try {
-      const cur = this.auth.currentUser;
-      if (cur && !cur.isAnonymous) await auth.signOut(this.auth);
-      const user = this.auth.currentUser?.isAnonymous ? this.auth.currentUser : (await auth.signInAnonymously(this.auth)).user;
-      try { await fs.setDoc(fs.doc(this.fdb, 'teamMembers', user.uid), { teamId, password: String(password).trim(), name: String(name).trim().slice(0, 40), createdAt: Date.now() }); } catch (e) {
-        await auth.signOut(this.auth).catch(() => {});
-        throw err(e.code === 'permission-denied' ? 'bad-team-login' : e.code, e.code === 'permission-denied' ? 'That team number and password don’t match.' : friendly(e).message);
+      const user = this.auth.currentUser || (await auth.signInAnonymously(this.auth)).user;
+      try { await fs.setDoc(fs.doc(this.fdb, 'teamMembers', memberDocId(user.uid, teamId)), { uid: user.uid, teamId, password: pw, name: nm, createdAt: Date.now() }); } catch (e) {
+        if (fresh) await auth.signOut(this.auth).catch(() => {});
+        throw err(e.code === 'permission-denied' ? 'bad-team-login' : e.code, e.code === 'permission-denied' ? 'That team number and password don’t match — or the coach has turned password sign-in off.' : friendly(e).message);
       }
-      this.cur = await this.fetchProfile(user);
-      this.emitAuth();
-      return this.cur;
+      rememberTeam({ teamId, password: pw, name: nm });
+      this.detach();
+      const prof = await this.attach(user);
+      if (!prof) throw err('bad-team-login', 'Couldn’t join that team.');
+      this.cur = prof; this.emitAuth();
+      return prof;
     } catch (e) { throw e.code?.startsWith?.('auth/') ? friendly(e) : e; } finally { this.joining = false; }
   }
-  async expire(message) {
-    const u = this.cur; this.notice = message; this.cur = null; this.emitAuth();
-    if (u?.viaPassword) { try { await this.sdk.fs.deleteDoc(this.sdk.fs.doc(this.fdb, 'teamMembers', u.uid)); } catch { /* best effort: the coach can also remove it */ } }
-    this.sdk.auth.signOut(this.auth).catch(() => {});
+  async signInTeam(number, password, name = '') {
+    const cur = this.auth.currentUser;
+    if (cur && !cur.isAnonymous) await this.sdk.auth.signOut(this.auth);
+    return this.joinTeam(number, password, name);
+  }
+  async syncLocalTeams() {
+    const { fs } = this.sdk;
+    const u = this.auth.currentUser; if (!u || u.isAnonymous) return;
+    for (const t of localTeams()) {
+      if (this.rows.pw.some((m) => m.teamId === t.teamId) || this.rows.roster.some((r) => r.teamId === t.teamId)) continue;
+      try { await fs.setDoc(fs.doc(this.fdb, 'teamMembers', memberDocId(u.uid, t.teamId)), { uid: u.uid, teamId: t.teamId, password: t.password, name: t.name || '', createdAt: Date.now() }); } catch (e) { if (e.code === 'permission-denied') forgetTeam(t.teamId); }
+    }
+  }
+  async leaveTeam(teamId) {
+    const { fs } = this.sdk; const u = this.cur; if (!u) return;
+    const t = u.teams.find((x) => x.teamId === teamId); if (!t) return;
+    if (t.role === 'coach') throw denied('Coaches can’t leave their own team — ask another coach or an admin to remove you.');
+    try {
+      if (this.rows.pw.some((m) => m.teamId === teamId)) await fs.deleteDoc(fs.doc(this.fdb, 'teamMembers', memberDocId(u.uid, teamId)));
+      if (t.via === 'roster') await fs.deleteDoc(fs.doc(this.fdb, 'roster', rosterId(teamId, u.email)));
+    } catch (e) { throw friendly(e); }
+    forgetTeam(teamId);
+    if (u.viaPassword && u.teams.length <= 1) await this.signOut();
   }
   async signOut() {
     const u = this.cur;
-    if (u?.viaPassword) { try { await this.sdk.fs.deleteDoc(this.sdk.fs.doc(this.fdb, 'teamMembers', u.uid)); } catch { /* best effort */ } }
+    if (u?.viaPassword) { // anonymous team-password session: tidy up its memberships
+      for (const m of this.rows?.pw || []) { try { await this.sdk.fs.deleteDoc(this.sdk.fs.doc(this.fdb, 'teamMembers', m.id)); } catch { /* best effort */ } }
+      setLocalTeams([]);
+    }
+    this.detach();
     await this.sdk.auth.signOut(this.auth);
   }
   subscribe(col, cb) {
@@ -391,37 +563,38 @@ class FirebaseStore {
     let q = fs.collection(this.fdb, col);
     if (col === 'signatures') { cb([]); return () => {}; }
     if (col === 'access' && u?.role !== 'admin') {
-      // a coach sees their team; a host sees the referees they added — a coach who is also a host sees both
-      const queries = [];
-      if (u?.role === 'coach') queries.push(fs.query(q, fs.where('teamId', '==', u.teamId)));
-      if (u?.host) queries.push(fs.query(q, fs.where('role', '==', 'judge'), fs.where('addedBy', '==', u.email)));
-      if (!queries.length) { cb([]); return () => {}; }
-      const parts = queries.map(() => []);
-      const emit = () => cb([...new Map(parts.flat().map((r) => [r.id, r])).values()]);
-      const unsubs = queries.map((qq, i) => fs.onSnapshot(qq, (snap) => { parts[i] = snap.docs.map((d) => ({ id: d.id, ...d.data() })); emit(); }, (e) => console.warn('[firestore] access:', e.code)));
-      return () => unsubs.forEach((f) => f());
+      // a host sees the referees they added
+      if (!u?.host) { cb([]); return () => {}; }
+      q = fs.query(q, fs.where('role', '==', 'judge'), fs.where('addedBy', '==', u.email));
     }
     if (col === 'eventHosts') {
       if (u?.role === 'admin') { /* all */ } else if (u?.host) q = fs.query(q, fs.where('emails', 'array-contains', u.email));
       else { cb([]); return () => {}; }
     }
     if (col === 'eventJudges') { // admins see every list; everyone else only the events they referee
-      if (u?.role === 'admin') { /* all */ } else if (u) q = fs.query(q, fs.where('emails', 'array-contains', u.email));
+      if (u?.role === 'admin') { /* all */ } else if (u?.email) q = fs.query(q, fs.where('emails', 'array-contains', u.email));
       else { cb([]); return () => {}; }
     }
-    if (col === 'practice') {
-      if (isTeamSide(u?.role)) q = fs.query(q, fs.where('teamId', '==', u.teamId));
+    if (col === 'practice') { // the active team's runs (admins: every team's)
+      if (u?.teamId) q = fs.query(q, fs.where('teamId', '==', u.teamId));
       else if (u?.role !== 'admin') { cb([]); return () => {}; }
     }
     if (col === 'teamSecrets') { cb([]); return () => {}; }
-    if (col === 'teamMembers') {
-      if (u?.role === 'coach') q = fs.query(q, fs.where('teamId', '==', u.teamId));
-      else if (u?.role !== 'admin') { cb([]); return () => {}; }
+    if (col === 'teamMembers' || col === 'roster') {
+      // the people on the teams I coach (one query per team); admins see everything
+      if (u?.role !== 'admin') {
+        const ids = coachTeamIds(u);
+        if (!ids.length) { cb([]); return () => {}; }
+        const parts = ids.map(() => []);
+        const emit = () => cb(parts.flat());
+        const unsubs = ids.map((tid, i) => fs.onSnapshot(fs.query(q, fs.where('teamId', '==', tid)), (snap) => { parts[i] = snap.docs.map((d) => ({ id: d.id, ...d.data() })); emit(); }, (e) => console.warn(`[firestore] ${col}:`, e.code)));
+        return () => unsubs.forEach((f) => f());
+      }
     }
     return fs.onSnapshot(q, (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (e) => {
       console.warn(`[firestore] ${col}:`, e.code);
       // a password session whose team password was changed gets "permission-denied" on its team data → sign it out
-      if (u?.viaPassword && e.code === 'permission-denied' && col === 'practice') this.expire('The team password was changed. Sign in again with the new password.');
+      if (e.code === 'permission-denied' && col === 'practice' && u?.teams?.some((t) => t.via === 'password')) this.recheck();
     });
   }
   async put(col, id, data) {

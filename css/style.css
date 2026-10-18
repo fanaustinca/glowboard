@@ -269,3 +269,23 @@ button.opt { cursor: pointer; } button.opt:hover:not(:disabled) { background: va
 .tl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } @media (max-width: 420px) { .tl-grid { grid-template-columns: 1fr; } }
 .or span { white-space: nowrap; }
 #tl button[type=submit] { margin-top: 12px; }
+/* teams tab, team colors, password state */
+.cdots { display: inline-flex; gap: 3px; margin-right: 7px; vertical-align: middle; } .cdots i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+.teamlist { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 8px; }
+.trow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--border, rgba(127,127,127,.3)); border-radius: 12px; background: var(--surface2); }
+.trow.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); } .trow .tmain { min-width: 0; flex: 1 1 180px; } .trow .acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.badge.on { background: var(--accent); color: #fff; }
+.pwbox.off code { opacity: .45; text-decoration: line-through; } .pwstate { margin: 6px 0; } .okt { color: #2e9e5b; } .offt { color: #d9480f; }
+.colorrow { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0; } .colorpick { display: inline-flex; align-items: center; gap: 4px; }
+.colorpick input[type=color] { width: 46px; height: 40px; padding: 2px; border-radius: 10px; border: 1px solid var(--border, rgba(127,127,127,.4)); background: var(--surface2); cursor: pointer; }
+.teamswitch { max-width: 360px; margin-bottom: 10px; }
+.colorpick .btn { min-width: 44px; min-height: 44px; }
+/* desktop: when the links don't fit the header, the extras go under a "More" drop-down */
+@media (min-width: 720px) {
+  .nav { position: relative; }
+  .nav .more { background: none; border: 0; color: var(--muted); font: inherit; font-weight: 600; padding: 8px 14px; border-radius: 999px; min-height: 40px; display: inline-flex; align-items: center; cursor: pointer; }
+  .nav .more:hover, .nav .more.on, .nav .more[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+  .nav-sheet { position: absolute; top: calc(100% + 6px); right: 0; min-width: 190px; display: grid; gap: 2px; padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 28px rgb(0 0 0 / .18); z-index: 60; }
+  .nav-sheet[hidden] { display: none; }
+  .nav .nav-sheet a { border-radius: 10px; }
+}
