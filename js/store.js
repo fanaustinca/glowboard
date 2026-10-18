@@ -33,7 +33,7 @@ const denied = (m) => err('permission-denied', m || 'Missing or insufficient per
 
 // ───────────────────────────── Demo backend ─────────────────────────────
 const KEY = 'glowboard-demo-v2';
-const COLS = ['teams', 'events', 'eventHosts', 'eventJudges', 'scores', 'signatures', 'practice', 'access'];
+const COLS = ['teams', 'events', 'eventHosts', 'eventJudges', 'teamSecrets', 'teamMembers', 'scores', 'signatures', 'practice', 'access'];
 
 function mulberry(seed) { return () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -86,6 +86,7 @@ function seedDemo() {
   DEMO_TEAMS.forEach(([number, name], i) => {
     const id = `t${number}`;
     db.teams[id] = { id, number, name, createdBy: 'demo' };
+    db.teamSecrets[id] = { id, password: number === 4201 ? '424242' : String(100000 + ((number * 7919) % 900000)), updatedBy: 'demo', updatedAt: 1 };
     const skill = 0.35 + (i % 4) * 0.12 + rand() * 0.15;
     const rounds = i === 7 ? 0 : (i % 3 === 0 ? 2 : 3);
     for (let r = 1; r <= rounds; r++) {
@@ -136,6 +137,11 @@ class DemoStore {
 
   // ----- auth -----
   get user() {
+    const m = this.db.teamMembers[this.session];
+    if (m) { // team-password member: valid only while the team's password is unchanged
+      if (this.db.teamSecrets[m.teamId]?.password !== m.password) return null;
+      return { uid: m.id, email: null, name: m.name || 'Team member', role: 'member', teamId: m.teamId, host: false, eventIds: null, viaPassword: true };
+    }
     const a = this.db.access[this.session];
     return a ? { uid: a.id, email: a.id, name: a.name || a.id.split('@')[0], role: a.role, teamId: a.teamId || null, host: a.role === 'host' || a.host === true, eventIds: a.eventIds || null } : null;
   }
@@ -148,7 +154,19 @@ class DemoStore {
     try { sessionStorage.setItem(KEY + '-session', e); } catch { /* ignore */ }
     this.emitAuth();
   }
+  async signInTeam(number, password, name = '') {
+    const teamId = `t${parseInt(number, 10)}`;
+    const secret = this.db.teamSecrets[teamId];
+    if (!secret || secret.password !== String(password).trim()) throw err('bad-team-login', 'That team number and password don’t match.');
+    const id = `pw-${Math.random().toString(36).slice(2, 10)}`;
+    this.db.teamMembers[id] = { id, teamId, password: secret.password, name: String(name).trim().slice(0, 40), createdAt: Date.now() };
+    this.session = id;
+    try { sessionStorage.setItem(KEY + '-session', id); } catch { /* ignore */ }
+    this.persist(); this.emit(); this.emitAuth();
+    return this.user;
+  }
   async signOut() {
+    if (this.db.teamMembers[this.session]) { delete this.db.teamMembers[this.session]; this.persist(); this.emit(); }
     this.session = null;
     try { sessionStorage.removeItem(KEY + '-session'); } catch { /* ignore */ }
     this.emitAuth();
@@ -160,6 +178,7 @@ class DemoStore {
   coachOf(u, teamId) { return u?.role === 'coach' && u.teamId === teamId; }
   onTeam(u, teamId) { return isTeamSide(u?.role) && u.teamId === teamId; }
   isHost(u) { return Boolean(u?.host); }
+  canSecret(u, teamId) { return this.isAdmin(u) || this.coachOf(u, teamId) || (this.isHost(u) && this.db.teams[teamId]?.createdBy === u.email); }
   refereeOf(u, eventId) { return Boolean(u) && (this.db.eventJudges[eventId]?.emails || []).includes(u.email); }
   judgeFor(u, eventId) { return this.isAdmin(u) || this.refereeOf(u, eventId) || (u?.role === 'judge' && (!u.eventIds || u.eventIds.includes(eventId))); }
   hostOf(u, eventId) { return this.isHost(u) && (this.db.eventHosts[eventId]?.emails || []).includes(u.email); }
@@ -171,6 +190,8 @@ class DemoStore {
       const u = this.user;
       let rows = Object.values(this.db[col] || {});
       if (col === 'signatures') rows = [];
+      if (col === 'teamSecrets') rows = [];
+      if (col === 'teamMembers') rows = this.isAdmin(u) ? rows : (u?.role === 'coach' ? rows.filter((r) => r.teamId === u.teamId) : []);
       if (col === 'eventJudges') rows = this.isAdmin(u) ? rows : rows.filter((r) => u && (r.emails || []).includes(u.email));
       if (col === 'eventHosts') rows = this.isAdmin(u) ? rows : (u?.host ? rows.filter((r) => (r.emails || []).includes(u.email)) : []);
       if (col === 'access') rows = this.isAdmin(u) ? rows : rows.filter((r) => (u?.role === 'coach' && r.teamId === u.teamId) || (u?.host && r.role === 'judge' && r.addedBy === u.email));
@@ -189,17 +210,23 @@ class DemoStore {
         if (!ROLES.includes(data.role) || (['coach', 'member'].includes(data.role) && typeof data.teamId !== 'string')) throw denied();
         if (id === u.email && data.role !== 'admin') throw denied('You can’t remove your own admin access.');
       } else {
-        const asCoach = this.coachOf(u, data.teamId) && data.role === 'member' && (!ex || (ex.role === 'member' && ex.teamId === data.teamId)) && data.addedBy === u?.email
+        const asCoach = this.coachOf(u, data.teamId) && ['member', 'coach'].includes(data.role) && (!ex || (ex.role === 'member' && data.role === 'member' && ex.teamId === data.teamId)) && data.addedBy === u?.email
           && Object.keys(data).every((k) => ['role', 'teamId', 'name', 'addedBy', 'addedAt'].includes(k));
         // hosts add referees limited to ONE event they host
         const asHost = this.isHost(u) && !ex && data.role === 'judge' && data.addedBy === u.email && Array.isArray(data.eventIds) && data.eventIds.length === 1 && this.hostOf(u, data.eventIds[0])
           && Object.keys(data).every((k) => ['role', 'name', 'addedBy', 'addedAt', 'eventIds'].includes(k));
-        if (!asCoach && !asHost) throw denied();
+        // a host sets up a designated coach for a team they created (new accounts only)
+        const asTeamHost = this.isHost(u) && !ex && data.role === 'coach' && data.addedBy === u.email && this.db.teams[data.teamId]?.createdBy === u.email
+          && Object.keys(data).every((k) => ['role', 'teamId', 'name', 'addedBy', 'addedAt'].includes(k));
+        if (!asCoach && !asHost && !asTeamHost) throw denied();
       }
     } else if (col === 'teams') {
       if (!(this.isAdmin(u) || (this.isHost(u) && !ex && data.createdBy === u.email))) throw denied();
       if (!this.validTeam(data) || id !== `t${data.number}`) throw err('invalid', 'A team needs a number and a name.');
       if (!this.isAdmin(u) && data.createdBy !== u.email) throw denied();
+    } else if (col === 'teamSecrets') {
+      this.need((x) => this.canSecret(x, id));
+      if (typeof data.password !== 'string' || data.password.length < 6 || data.password.length > 64) throw err('invalid', 'The team password needs at least 6 characters.');
     } else if (col === 'eventJudges') {
       this.need((x) => this.isAdmin(x) || this.hostOf(x, id));
       if (!Array.isArray(data.emails)) throw err('invalid', 'emails must be a list.');
@@ -245,6 +272,7 @@ class DemoStore {
   }
   async get(col, id) {
     if (col === 'signatures') { const ev = id.split('_')[0]; this.need((x) => this.judgeFor(x, ev) || this.hostOf(x, ev)); }
+    if (col === 'teamSecrets') this.need((x) => this.canSecret(x, id));
     if (col === 'eventJudges') this.need((x) => this.isAdmin(x) || this.hostOf(x, id) || (this.db.eventJudges[id]?.emails || []).includes(x.email));
     const r = this.db[col][id];
     return r ? { ...r } : null;
@@ -253,12 +281,15 @@ class DemoStore {
     const u = this.user, row = this.db[col][id];
     if (col === 'access') {
       const ok = (this.isAdmin(u) && id !== u.email) || (this.coachOf(u, row?.teamId) && row?.role === 'member')
+        || (this.coachOf(u, row?.teamId) && row?.role === 'coach' && row.addedBy === u.email && id !== u.email)
         || (this.isHost(u) && row?.role === 'judge' && row.addedBy === u.email);
       if (!ok) throw denied(id === u?.email ? 'You can’t remove your own access.' : undefined);
     } else if (col === 'practice') {
       if (!(this.isAdmin(u) || this.coachOf(u, row?.teamId) || (this.onTeam(u, row?.teamId) && row.uid === u.uid))) throw denied();
     } else if (col === 'teams') {
       if (!(this.isAdmin(u) || (this.isHost(u) && row?.createdBy === u.email))) throw denied();
+    } else if (col === 'teamMembers') {
+      if (!(this.isAdmin(u) || this.coachOf(u, row?.teamId) || (u && u.uid === id))) throw denied();
     } else if (col === 'eventJudges') this.need((x) => this.isAdmin(x) || this.hostOf(x, id));
     else if (['events', 'eventHosts', 'scores'].includes(col)) this.need(this.isAdmin);
     else throw denied();
@@ -285,6 +316,7 @@ class FirebaseStore {
     this.fdb = fs.getFirestore(this.fapp);
     auth.onAuthStateChanged(this.auth, async (fu) => {
       if (!fu) { this.cur = null; return this.emitAuth(); }
+      if (fu.isAnonymous && this.joining) return; // signInTeam finishes the sign-in itself
       const prof = await this.fetchProfile(fu).catch(() => null);
       // Signed in with Google but not on the access list → no permissions at all: sign straight back out.
       if (!prof) { this.cur = null; this.emitAuth(); auth.signOut(this.auth).catch(() => {}); return; }
@@ -294,6 +326,13 @@ class FirebaseStore {
   }
   async fetchProfile(fu) {
     const { fs } = this.sdk;
+    if (fu.isAnonymous) { // team-password session: the teamMembers/{uid} doc says which team
+      try {
+        const m = await fs.getDoc(fs.doc(this.fdb, 'teamMembers', fu.uid));
+        if (!m.exists()) return null;
+        return { uid: fu.uid, email: null, name: m.data().name || 'Team member', role: 'member', teamId: m.data().teamId, host: false, eventIds: null, viaPassword: true };
+      } catch { return null; }
+    }
     const email = normEmail(fu.email);
     let d;
     try { d = await fs.getDoc(fs.doc(this.fdb, 'access', email)); } catch (e) {
@@ -318,7 +357,34 @@ class FirebaseStore {
     if (!prof) throw err('not-authorized', `${email} isn’t on the access list. Ask your coach or an admin to add this Google account, then sign in again. (First admin? In Firestore create collection “access”, Document ID exactly “${email}”, field role = admin.)`);
     return prof;
   }
-  async signOut() { await this.sdk.auth.signOut(this.auth); }
+  // Team password: an anonymous session + a teamMembers/{uid} doc carrying the password; the rules compare it with the team's.
+  async signInTeam(number, password, name = '') {
+    const { auth, fs } = this.sdk;
+    const teamId = `t${parseInt(number, 10)}`;
+    this.joining = true;
+    try {
+      const cur = this.auth.currentUser;
+      if (cur && !cur.isAnonymous) await auth.signOut(this.auth);
+      const user = this.auth.currentUser?.isAnonymous ? this.auth.currentUser : (await auth.signInAnonymously(this.auth)).user;
+      try { await fs.setDoc(fs.doc(this.fdb, 'teamMembers', user.uid), { teamId, password: String(password).trim(), name: String(name).trim().slice(0, 40), createdAt: Date.now() }); } catch (e) {
+        await auth.signOut(this.auth).catch(() => {});
+        throw err(e.code === 'permission-denied' ? 'bad-team-login' : e.code, e.code === 'permission-denied' ? 'That team number and password don’t match.' : friendly(e).message);
+      }
+      this.cur = await this.fetchProfile(user);
+      this.emitAuth();
+      return this.cur;
+    } catch (e) { throw e.code?.startsWith?.('auth/') ? friendly(e) : e; } finally { this.joining = false; }
+  }
+  async expire(message) {
+    const u = this.cur; this.notice = message; this.cur = null; this.emitAuth();
+    if (u?.viaPassword) { try { await this.sdk.fs.deleteDoc(this.sdk.fs.doc(this.fdb, 'teamMembers', u.uid)); } catch { /* best effort: the coach can also remove it */ } }
+    this.sdk.auth.signOut(this.auth).catch(() => {});
+  }
+  async signOut() {
+    const u = this.cur;
+    if (u?.viaPassword) { try { await this.sdk.fs.deleteDoc(this.sdk.fs.doc(this.fdb, 'teamMembers', u.uid)); } catch { /* best effort */ } }
+    await this.sdk.auth.signOut(this.auth);
+  }
   subscribe(col, cb) {
     const { fs } = this.sdk;
     const u = this.cur;
@@ -347,7 +413,16 @@ class FirebaseStore {
       if (isTeamSide(u?.role)) q = fs.query(q, fs.where('teamId', '==', u.teamId));
       else if (u?.role !== 'admin') { cb([]); return () => {}; }
     }
-    return fs.onSnapshot(q, (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (e) => console.warn(`[firestore] ${col}:`, e.code));
+    if (col === 'teamSecrets') { cb([]); return () => {}; }
+    if (col === 'teamMembers') {
+      if (u?.role === 'coach') q = fs.query(q, fs.where('teamId', '==', u.teamId));
+      else if (u?.role !== 'admin') { cb([]); return () => {}; }
+    }
+    return fs.onSnapshot(q, (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), (e) => {
+      console.warn(`[firestore] ${col}:`, e.code);
+      // a password session whose team password was changed gets "permission-denied" on its team data → sign it out
+      if (u?.viaPassword && e.code === 'permission-denied' && col === 'practice') this.expire('The team password was changed. Sign in again with the new password.');
+    });
   }
   async put(col, id, data) {
     const { fs } = this.sdk;

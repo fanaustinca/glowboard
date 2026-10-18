@@ -76,7 +76,7 @@ function renderChrome() {
     sheet.addEventListener('click', () => { sheet.hidden = true; });
   } else nav.innerHTML = links.map(link).join('');
   document.getElementById('who').innerHTML = u
-    ? `<span class="user"><b>${esc(u.name)}</b><span class="badge">${esc(ROLE_LABEL[u.role] || u.role)}${u.host && u.role !== 'host' ? ' · host' : ''}</span></span>`
+    ? `<span class="user"><b>${esc(u.name)}</b><span class="badge">${esc(ROLE_LABEL[u.role] || u.role)}${u.host && u.role !== 'host' ? ' · host' : ''}${u.viaPassword ? ' · password' : ''}</span></span>`
     : '<a class="btn primary small" id="signin-link" href="#/login">Sign in</a>';
   document.getElementById('signout').hidden = !u;
   document.getElementById('modebar').hidden = store.mode !== 'demo';

@@ -29,7 +29,7 @@ function missionHTML(m) {
       <span class="ico" aria-hidden="true">🚫</span><span>Model touching equipment at end <small>→ 0 pts</small></span></button>` : '';
   return `<section class="mission card" id="mission-${m.id}" data-mission="${m.id}" aria-labelledby="mh-${m.id}">
     <header>
-      <img class="mimg" src="${m.image}" alt="Mission ${m.num} reference image" loading="lazy" width="320" height="180" data-fallback="${m.placeholder}">
+      <img class="mimg" src="${m.image}" alt="Mission ${m.num} reference image" loading="lazy" width="320" height="220" data-fallback="${m.placeholder}">
       <div class="mtitle"><span class="mnum">M${String(m.num).padStart(2, '0')}</span><h3 id="mh-${m.id}">${esc(m.name)}</h3>
         <span class="mscore" data-role="mscore" aria-live="polite">0 / 0</span></div>
     </header>

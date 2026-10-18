@@ -335,13 +335,13 @@ await check('coach: renames their team and adds/removes a member (but cannot tou
   assert.match(await text(page, '#t-err'), /already on your team/);
   const r = await page.evaluate(async () => {
     const { createStore } = await import('./js/store.js'); const s = await createStore(); const out = [];
-    for (const f of [() => s.patch('teams', 't5530', { name: 'Hijack' }), () => s.patch('teams', 't4201', { number: 1 }), () => s.put('access', 'x@gmail.com', { role: 'coach', teamId: 't4201', addedBy: s.user.email }),
+    for (const f of [() => s.patch('teams', 't5530', { name: 'Hijack' }), () => s.patch('teams', 't4201', { number: 1 }), () => s.put('access', 'x@gmail.com', { role: 'coach', teamId: 't4201', addedBy: s.user.email }), /* allowed: coaches may add coaches */
       () => s.put('access', 'y@gmail.com', { role: 'member', teamId: 't5530', addedBy: s.user.email }), () => s.remove('access', 'coach@demo.test')]) {
       try { await f(); out.push('allowed'); } catch (e) { out.push(e.code); }
     }
     return out;
   });
-  assert.deepEqual(r, Array(5).fill('permission-denied'));
+  assert.deepEqual(r, ['permission-denied', 'permission-denied', 'allowed', 'permission-denied', 'permission-denied'], 'a coach can add coaches to their own team — nothing else changes');
   page.once('dialog', (d) => d.accept());
   await page.$eval('[data-rm="parent@gmail.com"]', (e) => e.click());
   await page.waitForFunction(() => !document.querySelector('#t-people').textContent.includes('parent@gmail.com'));
@@ -367,11 +367,16 @@ await check('admin: events, teams, people & access, CSV, edit score, delete scor
   await tap(page, '#a-team button'); assert.match(await text(page, '#a-terr'), /number is required/);
   await page.type('#a-tn', '55'); await tap(page, '#a-team button'); assert.match(await text(page, '#a-terr'), /name is required/);
   await page.$eval('#a-tn', (e) => { e.value = ''; });
-  await page.type('#a-tn', '1234'); await page.type('#a-tname', 'Test <b>Team</b>'); await tap(page, '#a-team button');
+  await page.type('#a-tn', '1234'); await page.type('#a-tname', 'Test <b>Team</b>'); await tap(page, '#a-team button'); assert.match(await text(page, '#a-terr'), /coach’s Google email/);
+  await page.type('#a-tcoach', 'new.coach@gmail.com'); await tap(page, '#a-team button');
+  await page.waitForSelector('dialog[open] .pwbox code');
+  const pw1234 = await text(page, 'dialog .pwbox code'); assert.match(pw1234, /^[1-9]\d{5}$/, 'a 6-digit team password is generated'); await tap(page, 'dialog [data-close]');
   await page.waitForFunction(() => document.querySelector('#a-teams').textContent.includes('#1234'));
   assert.equal(await page.$('#a-teams b b'), null, 'team names are HTML-escaped');
+  assert.match(await text(page, '#a-teams'), /new\.coach@gmail\.com/, 'the designated coach is listed on the team');
   await page.$eval('.bulk summary', (e) => e.click());
-  await page.type('#a-bulk', '777, Alpha\n888, Beta\nbad line'); await page.$eval('#a-bulkgo', (e) => e.click());
+  await page.type('#a-bulk', '777, Alpha, alpha.coach@gmail.com\n888, Beta\nbad line'); await page.$eval('#a-bulkgo', (e) => e.click());
+  await page.waitForSelector('dialog[open] table.data'); assert.equal((await page.$$('dialog table.data tbody tr')).length, 2, 'bulk add lists each new team with its password'); await tap(page, 'dialog [data-close]');
   await page.waitForFunction(() => document.querySelector('#a-teams').textContent.includes('#888'));
   await page.type('#a-ue', 'NewJudge@Gmail.com'); await page.select('#a-ur', 'judge'); await tap(page, '#a-user button');
   await page.waitForFunction(() => document.querySelector('#a-users').textContent.includes('newjudge@gmail.com'));
@@ -420,8 +425,11 @@ await check('admin assigns an event host; host manages teams and builds + saves 
   assert.equal(await page.$('#e-sel'), null, 'host of one event sees only that event');
   await tap(page, '#e-team button'); assert.match(await text(page, '#e-terr'), /number is required/);
   await page.type('#e-tn', '8800'); await tap(page, '#e-team button'); assert.match(await text(page, '#e-terr'), /name is required/);
-  await page.type('#e-tname', 'Host <i>Added</i>'); await tap(page, '#e-team button');
+  await page.type('#e-tname', 'Host <i>Added</i>'); await tap(page, '#e-team button'); assert.match(await text(page, '#e-terr'), /coach’s Google email/);
+  await page.type('#e-tcoach', 'host.coach@gmail.com'); await tap(page, '#e-team button');
+  await page.waitForSelector('dialog[open] .pwbox code'); await tap(page, 'dialog [data-close]');
   await page.waitForFunction(() => document.querySelector('#e-checks').textContent.includes('#8800'));
+  assert.ok(await page.$('#e-checks [data-teampw="t8800"]'), 'the host can re-open the password of a team they created');
   assert.equal(await page.$('#e-checks i'), null, 'team names are HTML-escaped');
   await page.$eval('#e-all', (e) => e.click()); await page.$eval('#e-saveteams', (e) => e.click());
   await page.waitForFunction(() => document.querySelector('.toast.ok'));
@@ -470,6 +478,37 @@ await check('admin assigns an event host; host manages teams and builds + saves 
     return out;
   });
   assert.deepEqual(ref, ['permission-denied', 'allowed', 'permission-denied'], 'referee can score the host’s event only and nothing else');
+});
+await check('team password sign-in (demo): members join with number + password, get member powers only, and a password change signs them out', async () => {
+  await page.evaluate(() => document.getElementById('signout').click());
+  await goHash(page, 'login');
+  const join = async (num, pw, name = '') => { for (const [sel, v] of [['#tl-num', num], ['#tl-pw', pw], ['#tl-name', name]]) { await page.$eval(sel, (e) => { e.value = ''; }); if (v) await page.type(sel, v); } await tap(page, '#tl button'); await new Promise((r) => setTimeout(r, 300)); };
+  await join('4201', 'wrong1'); assert.match(await text(page, '#lg-err'), /don’t match/);
+  await join('4201', '424242', 'Sam');
+  assert.equal(await page.evaluate(() => location.hash), '#/practice');
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']);
+  await tap(page, '#sc-equip'); await tap(page, '#sc-submit'); await page.waitForSelector('.toast.ok');
+  await goHash(page, 'stats'); assert.match(await text(page, '#st'), /Sam/, 'their name is on the run in the shared team history');
+  await goHash(page, 'team'); assert.equal(await page.$('#t-add'), null);
+  for (const [h, re] of [['judge', /Referees only/], ['admin', /Admins only/], ['event', /Hosts only/]]) { await goHash(page, h); assert.match(await text(page, 'main'), re, h); }
+  const r = await page.evaluate(async () => {
+    const { createStore } = await import('./js/store.js'); const s = await createStore(); const out = [];
+    for (const f of [() => s.submitScore({ eventId: 'ev1', teamId: 't4201', round: 3, total: 1, gp: 3, judgeUid: s.user.uid }, 'x'), () => s.put('access', 'z@gmail.com', { role: 'member', teamId: 't4201', addedBy: 'x' }), () => s.get('teamSecrets', 't4201'), () => s.patch('teams', 't4201', { name: 'x' }), () => s.put('teamSecrets', 't4201', { password: 'abcdef' })]) {
+      try { await f(); out.push('allowed'); } catch (e) { out.push(e.code); }
+    }
+    return out;
+  });
+  assert.deepEqual(r, Array(5).fill('permission-denied'), 'a team password never grants anything elevated');
+  await page.evaluate(() => document.getElementById('signout').click());
+  await login(page, 'coach@demo.test');
+  await goHash(page, 'team'); await tap(page, '#t-pw'); await page.waitForSelector('dialog[open] #pw-code');
+  assert.equal(await text(page, 'dialog #pw-code'), '424242'); await shot(page, 'flow-team-password');
+  await page.type('dialog #pw-custom', 'robots2026'); await page.$eval('dialog #pw-form button', (e) => e.click());
+  await page.waitForFunction(() => document.querySelector('dialog #pw-code').textContent === 'robots2026'); await tap(page, 'dialog [data-close]');
+  await page.evaluate(() => document.getElementById('signout').click());
+  await goHash(page, 'login'); await join('4201', '424242'); assert.match(await text(page, '#lg-err'), /don’t match/);
+  await join('4201', 'robots2026'); assert.equal(await page.evaluate(() => location.hash), '#/practice');
+  await page.evaluate(() => document.getElementById('signout').click());
 });
 await check('coach who is also a host: coach pages + host pages, phone bar = 4 tabs + More, nothing leaks to other events', async () => {
   await page.evaluate(() => document.getElementById('signout').click());

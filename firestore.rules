@@ -12,15 +12,29 @@ rules_version = '2';
 //   referee/judge → ALSO a per-event modifier (eventJudges/{eventId}.emails): anyone with an access doc — a coach, a
 //            member — can referee a specific event. The `judge` base role is for people who are only referees
 //            (optional eventIds limits them to those events; none = every event).
-//   coach  → belongs to one team; renames it, adds/removes members of THAT team, practice + stats.
-//   member → belongs to one team; practice + stats.
+//   coach  → belongs to one team (a team can have several); renames it, adds/removes coaches and members of THAT
+//            team, sets the team password, practice + stats. Google sign-in only.
+//   member → belongs to one team; practice + stats. Either added by gmail, or signs in with the team's shared
+//            password (no Google account; see teamSecrets / teamMembers). Never elevated.
 // Anyone can read teams, events and official scores (public dashboard). Nobody can write without an access doc.
 // Bootstrap: create the first admin's access/{gmail} document by hand in the console (README → First admin).
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function signedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null && request.auth.token.get('email_verified', false) == true;
+    }
+    // Team-password sign-in: an anonymous Firebase session that proved it knows the team's shared password
+    // (teamMembers/{uid} stores the password it used; it stops working the moment the team password changes).
+    function isAnon() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+    function viaTeamPassword(teamId) {
+      return isAnon()
+        && exists(/databases/$(database)/documents/teamMembers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/teamMembers/$(request.auth.uid)).data.teamId == teamId
+        && get(/databases/$(database)/documents/teamMembers/$(request.auth.uid)).data.password
+          == get(/databases/$(database)/documents/teamSecrets/$(teamId)).data.password;
     }
     function myDoc() {
       return get(/databases/$(database)/documents/access/$(request.auth.token.email));
@@ -60,7 +74,17 @@ service cloud.firestore {
       return hasAccess() && myRole() == 'coach' && myTeam() == teamId;
     }
     function onTeam(teamId) {
-      return hasAccess() && (myRole() == 'coach' || myRole() == 'member') && myTeam() == teamId;
+      return (hasAccess() && (myRole() == 'coach' || myRole() == 'member') && myTeam() == teamId)
+        || viaTeamPassword(teamId);
+    }
+    function teamCreator(teamId) {
+      return isHostAny()
+        && get(/databases/$(database)/documents/teams/$(teamId)).data.get('createdBy', '') == request.auth.token.email;
+    }
+    function validSecret(d) {
+      return d.password is string && d.password.size() >= 6 && d.password.size() <= 64
+        && d.keys().hasOnly(['password', 'updatedBy', 'updatedAt'])
+        && d.updatedBy == request.auth.token.email;
     }
 
     // Highest possible Robot Game score is well under 1000 (see js/scoring.js maxScores()).
@@ -86,9 +110,16 @@ service cloud.firestore {
           && (request.resource.data.role in ['admin', 'host', 'judge'] || request.resource.data.teamId is string))
         || (coachOf(request.resource.data.teamId)
           && email == email.lower()
-          && request.resource.data.role == 'member'
+          && request.resource.data.role in ['member', 'coach']
           && request.resource.data.keys().hasOnly(['role', 'teamId', 'name', 'addedBy', 'addedAt'])
           && request.resource.data.addedBy == request.auth.token.email)
+        || (isHostAny()
+          && email == email.lower()
+          && request.resource.data.role == 'coach'
+          && request.resource.data.keys().hasOnly(['role', 'teamId', 'name', 'addedBy', 'addedAt'])
+          && request.resource.data.addedBy == request.auth.token.email
+          && request.resource.data.teamId is string
+          && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.get('createdBy', '') == request.auth.token.email)
         || (isHostAny()
           && email == email.lower()
           && request.resource.data.role == 'judge'
@@ -105,6 +136,8 @@ service cloud.firestore {
           && request.resource.data.teamId == resource.data.teamId);
       allow delete: if (isAdmin() && request.auth.token.email != email)
         || (coachOf(resource.data.teamId) && resource.data.role == 'member')
+        || (coachOf(resource.data.teamId) && resource.data.role == 'coach'
+          && resource.data.get('addedBy', '') == request.auth.token.email && request.auth.token.email != email)
         || (isHostAny() && resource.data.role == 'judge' && resource.data.get('addedBy', '') == request.auth.token.email);
     }
 
@@ -120,6 +153,26 @@ service cloud.firestore {
         || (hasAccess() && request.auth.token.email in resource.data.emails);
       allow list: if isAdmin() || (hasAccess() && request.auth.token.email in resource.data.emails);
       allow write: if (isAdmin() || isHostOf(eventId)) && request.resource.data.emails is list;
+    }
+
+    // The shared team password. Only the team's coaches, admins and the host who created the team can see/change it.
+    match /teamSecrets/{teamId} {
+      allow read: if isAdmin() || coachOf(teamId) || teamCreator(teamId);
+      allow create, update: if (isAdmin() || coachOf(teamId) || teamCreator(teamId)) && validSecret(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // "I know the team password" sessions (anonymous auth). The password in the doc must match the team's current one.
+    match /teamMembers/{uid} {
+      allow read: if request.auth != null
+        && (request.auth.uid == uid || isAdmin() || coachOf(resource.data.teamId));
+      allow create, update: if isAnon() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['teamId', 'password', 'name', 'createdAt'])
+        && request.resource.data.teamId is string
+        && request.resource.data.password == get(/databases/$(database)/documents/teamSecrets/$(request.resource.data.teamId)).data.password
+        && request.resource.data.get('name', '') is string && request.resource.data.get('name', '').size() <= 40;
+      allow delete: if request.auth != null
+        && (request.auth.uid == uid || isAdmin() || coachOf(resource.data.teamId));
     }
 
     match /events/{eventId} {

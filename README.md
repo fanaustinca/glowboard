@@ -4,6 +4,7 @@ Live score tracking for **FIRST® LEGO® League Challenge** events — currently
 
 * **Public dashboard** – anyone can see live standings, per-match scores and mission breakdowns. No login.
 * **Closed system, Google sign-in only.** Everyone needs a Google account on the access list. **Admins** create events, add coaches (any number per team), judges and other admins by gmail, and give people the **host** modifier for specific events. **Host** and **referee** are *per-event modifiers* — a coach or team member can be the host or a referee of one event and stays a coach everywhere else. Hosts add teams, pick which teams compete, generate the **match schedule**, add referees and enter scores for their event. **Coaches** add their own team members/parents/anyone. Coaches and members submit **practice runs** (the same scoring form judges use, saved under the team) and see **team stats**: averages, success rates per mission and per task, most/least reliable missions, trends. Standings are per event.
+* **Team password sign-in.** Every team gets a random 6-digit password when an admin/host creates it (with a designated coach). Team members enter team number + password — no Google account — and get *member* powers only (practice runs + team stats). Coaches can change the password (which signs everyone using the old one out), add more coaches or members by gmail, or just share the password. Elevated roles (coach, judge, host, admin) always require Google sign-in.
 * **Judge scoring page** – team dropdown (number + name), every mission with the exact scoresheet rules, counters, live total, review table, Gracious Professionalism®, digital team signature.
 * Works on phones first (48 px touch targets, sticky live total, bottom nav) and scales up to desktop. Light/dark.
 * **Runs with zero setup in demo mode** (data in `localStorage`, seeded with 8 fake teams). Add your Firebase config to go live.
@@ -12,7 +13,7 @@ Try it: `npm run serve` then open the printed URL. Demo mode simulates Google si
 
 ## Go live with Firebase
 
-1. Create a Firebase project → **Authentication → Sign-in method → Google: enable**.
+1. Create a Firebase project → **Authentication → Sign-in method → Google: enable**, and also **Anonymous: enable** (team-password sign-in uses anonymous sessions; leave Email/Password off).
 2. **Firestore Database → create** (production mode), then paste `firestore.rules` into *Rules* (or `firebase deploy --only firestore:rules`).
 3. Project settings → *Your apps* → Web app → copy the config into **`js/firebase-config.js`**. These values are public by design (every Firebase web app ships them); the Firestore rules are what protect the data.
 4. Add your site's domain (e.g. `<you>.github.io`) to **Authentication → Settings → Authorized domains**.
@@ -24,6 +25,8 @@ Try it: `npm run serve` then open the printed URL. Demo mode simulates Google si
 |---|---|---|
 | `access/{gmail}` `{role,teamId?,name?,host?,eventIds?,addedBy}` | self; admin; a coach reads their team's list; a host reads the referees they added | admin (anyone); coach adds/removes **members** of their team; a host adds referee-only accounts for their event |
 | `events/{id}` `{name,date,live,teamIds?,schedule?}` | everyone | admin; a host of that event only `teamIds` + `schedule` |
+| `teamSecrets/{teamId}` `{password,updatedBy,updatedAt}` | that team's coaches, admins, the host who created the team | same |
+| `teamMembers/{anonUid}` `{teamId,password,name}` | the member, that team's coaches, admins | the member (password must match `teamSecrets`) |
 | `eventHosts/{eventId}` `{emails:[…]}` | admin, the listed hosts | admin |
 | `eventJudges/{eventId}` `{emails:[…]}` (event referees) | admin, that event's hosts, the listed referees | admin, that event's hosts |
 | `teams/{t<number>}` `{number,name,createdBy}` | everyone | admin; hosts create (and edit/delete the ones they created); a coach may change only `name` |
@@ -31,9 +34,13 @@ Try it: `npm run serve` then open the printed URL. Demo mode simulates Google si
 | `signatures/{same id}` | judge/host/admin only | judge/host/admin create; admin update/delete |
 | `practice/{id}` `{teamId,uid,…}` | that team's coaches/members, admin | that team create; coach/owner delete |
 
+### How team passwords are enforced
+There is no server: a team-password member is an anonymous Firebase session that writes `teamMembers/{uid}` containing the password it typed; the rules only accept it if it equals `teamSecrets/{teamId}.password`, and every team-scoped read/write re-checks that match — so changing the password locks old sessions out immediately. A 6-digit code can be brute-forced given enough attempts, and only guards *practice data*; coaches can pick a longer password (up to 64 characters).
+
 ## Troubleshooting sign-in
 * **“… isn't on the access list”** – there is no Firestore document `access/<your lowercase gmail>`. The message shows the exact ID to use. First admin: collection `access`, Document ID = your gmail in lowercase, string field `role` = `admin`.
 * **“Firestore blocked reading the access list”** – the rules aren't published yet. Paste `firestore.rules` into Firestore → Rules → Publish.
+* **Team sign-in says “don't match” for a correct password** – turn on **Anonymous** sign-in (Authentication → Sign-in method) and publish the latest rules.
 * **“domain isn't authorized”** – add `<you>.github.io` under Authentication → Settings → Authorized domains.
 
 ## Match schedule

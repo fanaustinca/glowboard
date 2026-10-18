@@ -61,6 +61,38 @@ assert.match(await page.$eval('#lg-err', (e) => e.textContent), /Firestore block
 await page.evaluate(() => { globalThis.__fb.blockAccessReads = false; });
 ok('a blocked lookup (rules not published) is reported as such, with the fix — not as “not registered”');
 
+// ---- team-password sign-in (members only; elevated roles stay Google-only) ----
+await hash('login');
+assert.ok(await page.$('#tl')); ok('the login page offers a team-password form next to Google sign-in');
+const joinTeam = async (num, pw, name = '') => {
+  for (const [sel, v] of [['#tl-num', num], ['#tl-pw', pw], ['#tl-name', name]]) { await page.$eval(sel, (e) => { e.value = ''; }); if (v) await page.type(sel, v); }
+  await tap(page, '#tl button'); await w(600);
+};
+await joinTeam('1', '000000'); assert.match(await page.$eval('#lg-err', (e) => e.textContent), /team number and password don’t match/);
+await joinTeam('99', '123456'); assert.match(await page.$eval('#lg-err', (e) => e.textContent), /don’t match/);
+assert.deepEqual(await nav(), ['Standings', 'Schedule']); assert.equal(Object.keys((await fbState()).docs.teamMembers).length, 0, 'failed attempts leave nothing behind');
+ok('a wrong team number or password is rejected (and signed back out)');
+await joinTeam('1', '123456', 'Sam');
+assert.equal(await page.evaluate(() => location.hash), '#/practice');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']); assert.match(await page.$eval('#who', (e) => e.textContent), /Sam[\s\S]*password/i);
+ok('the right password signs in as a team member: Practice, Stats, Team — nothing else');
+await tap(page, '#sc-equip'); await tap(page, '#sc-submit'); await page.waitForSelector('.toast.ok');
+const mr = Object.values((await fbState()).docs.practice).find((r) => r.by === 'Sam');
+assert.ok(mr && mr.teamId === 't1' && mr.uid.startsWith('anon-')); ok('practice runs from a password member are saved under the team, with their name');
+await hash('team'); assert.equal(await page.$('#t-add'), null); assert.equal(await page.$('#t-pw'), null); ok('password members can’t manage people or the team password');
+for (const [h, re] of [['judge', /Referees only/], ['admin', /Admins only/], ['event', /Hosts only/]]) { await hash(h); assert.match(await page.$eval('main', (e) => e.textContent), re, h); }
+ok('Judge / Admin / Event pages are closed to password members');
+// the coach changes the team password → the old session is signed out on its next read
+await page.evaluate(() => { globalThis.__fb.docs.teamSecrets.t1.password = '246810'; globalThis.__fb.expirePractice = true; });
+await hash('stats'); await w(500);
+assert.deepEqual(await nav(), ['Standings', 'Schedule']); await hash('login');
+assert.match(await page.$eval('#lg-err', (e) => e.textContent), /team password was changed/); ok('changing the team password signs old password sessions out, with a clear message');
+await page.evaluate(() => { globalThis.__fb.expirePractice = false; });
+await joinTeam('1', '123456'); assert.match(await page.$eval('#lg-err', (e) => e.textContent), /don’t match/);
+await joinTeam('1', '246810', 'Sam again'); assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Practice', 'Stats', 'Team']); ok('the old password stops working; the new one works');
+await signOut(); assert.equal(Object.keys((await fbState()).docs.teamMembers).length, 0); ok('signing out removes the password session');
+await page.evaluate(() => { globalThis.__fb.docs.teamSecrets.t1.password = '123456'; });
+
 // judge
 await signIn('uid-judge', 'judge@gmail.com');
 assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Judge']); ok('judge on the access list gets Judge only');
@@ -100,10 +132,15 @@ await page.type('#t-email', 'Parent@Gmail.com'); await page.type('#t-pname', 'Sa
 st = await fbState();
 assert.deepEqual({ ...st.docs.access['parent@gmail.com'], addedAt: 0 }, { role: 'member', teamId: 't1', name: 'Sam’s mom', addedBy: 'coach@gmail.com', addedAt: 0 });
 assert.match(await page.$eval('#t-people', (e) => e.textContent), /parent@gmail\.com/); ok('coach adds a member by gmail (lowercased, own team, role=member)');
+await page.type('#t-email', 'Second.Coach@Gmail.com'); await page.select('#t-role', 'coach'); await tap(page, '#t-add button'); await w(400);
+st = await fbState(); assert.equal(st.docs.access['second.coach@gmail.com'].role, 'coach'); assert.equal(st.docs.access['second.coach@gmail.com'].teamId, 't1'); assert.equal(st.docs.access['second.coach@gmail.com'].addedBy, 'coach@gmail.com');
+assert.match(await page.$eval('#t-people', (e) => e.textContent), /second\.coach@gmail\.com[\s\S]*Remove/); ok('a coach can add another coach (and remove coaches they added)');
+await tap(page, '#t-pw'); await page.waitForSelector('dialog[open] #pw-code'); assert.equal(await page.$eval('dialog #pw-code', (e) => e.textContent), '123456'); await tap(page, 'dialog [data-close]');
+assert.match(await page.$eval('#t-pwcount', (e) => e.textContent), /\(\d+\)/); ok('the coach can see the team password and who has joined with it');
 await page.type('#t-email', 'not-an-email'); await tap(page, '#t-add button'); await w(200);
 assert.match(await page.$eval('#t-err', (e) => e.textContent), /valid Google email/); ok('bad email is rejected');
 await hash('practice'); await page.$eval('#sc-equip', (e) => e.click()); await page.$eval('#sc-submit', (e) => e.click()); await page.waitForSelector('.toast.ok');
-st = await fbState(); const run = Object.values(st.docs.practice)[0];
+st = await fbState(); const run = Object.values(st.docs.practice).find((r) => r.by === 'Coach C');
 assert.equal(run.teamId, 't1'); assert.equal(run.by, 'Coach C'); assert.equal(run.total, 70); ok('practice run is saved against the team');
 await hash('judge'); assert.match(await page.$eval('main', (e) => e.textContent), /Referees only/); ok('coach (not a referee) cannot open the judge page');
 await signOut();
@@ -121,9 +158,17 @@ assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Judge', 'Event']); ok('
 await hash('admin'); assert.match(await page.$eval('main', (e) => e.textContent), /Admins only/); ok('host is blocked from the admin console');
 await hash('event');
 assert.match(await page.$eval('#ev', (e) => e.textContent), /Regional/);
-await page.type('#e-tn', '77'); await page.type('#e-tname', 'Hosted Team'); await tap(page, '#e-team button'); await w(400);
-assert.deepEqual((await fbState()).docs.teams.t77, { number: 77, name: 'Hosted Team', createdBy: 'host@gmail.com' }); ok('host adds a team (number + name, creator recorded)');
-await tap(page, '#e-team button'); await w(100); assert.match(await page.$eval('#e-terr', (e) => e.textContent), /number is required/); ok('host form also requires a number and a name');
+await tap(page, '#e-team button'); await w(100); assert.match(await page.$eval('#e-terr', (e) => e.textContent), /number is required/);
+await page.type('#e-tn', '77'); await tap(page, '#e-team button'); await w(100); assert.match(await page.$eval('#e-terr', (e) => e.textContent), /name is required/);
+await page.type('#e-tname', 'Hosted Team'); await tap(page, '#e-team button'); await w(100); assert.match(await page.$eval('#e-terr', (e) => e.textContent), /coach’s Google email/);
+ok('host form requires a number, a name AND a designated coach');
+await page.type('#e-tcoach', 'Designated@Gmail.com'); await tap(page, '#e-team button'); await w(500);
+st = await fbState();
+assert.deepEqual(st.docs.teams.t77, { number: 77, name: 'Hosted Team', createdBy: 'host@gmail.com' });
+assert.match(st.docs.teamSecrets.t77.password, /^[1-9]\d{5}$/); assert.equal(st.docs.teamSecrets.t77.updatedBy, 'host@gmail.com');
+assert.deepEqual({ ...st.docs.access['designated@gmail.com'], addedAt: 0 }, { role: 'coach', teamId: 't77', name: '', addedBy: 'host@gmail.com', addedAt: 0 });
+assert.match(await page.$eval('dialog[open]', (d) => d.textContent), new RegExp(st.docs.teamSecrets.t77.password)); await tap(page, 'dialog [data-close]');
+ok('host adds a team: random 6-digit team password created, designated coach added, password shown once');
 await page.$eval('#c-rounds', (e) => { e.value = '3'; }); await page.$eval('#c-tables', (e) => { e.value = '2'; });
 await tap(page, '#e-gen'); await w(300);
 assert.match(await page.$eval('#e-sched', (e) => e.textContent), /Preview \(not saved\)/);
@@ -143,8 +188,20 @@ await page.type('#a-evn', 'State Finals'); await tap(page, '#a-ev button'); awai
 assert.ok(Object.values((await fbState()).docs.events).some((e) => e.name === 'State Finals')); ok('admin adds an event');
 await tap(page, '#a-team button'); await w(100); assert.match(await page.$eval('#a-terr', (e) => e.textContent), /number is required/);
 await page.type('#a-tn', '42'); await tap(page, '#a-team button'); await w(100); assert.match(await page.$eval('#a-terr', (e) => e.textContent), /name is required/);
-await page.type('#a-tname', 'Fortytwo'); await tap(page, '#a-team button'); await w(300);
-assert.deepEqual((await fbState()).docs.teams.t42, { number: 42, name: 'Fortytwo', createdBy: 'boss@gmail.com' }); ok('adding a team requires BOTH number and name');
+await page.type('#a-tname', 'Fortytwo'); await tap(page, '#a-team button'); await w(100); assert.match(await page.$eval('#a-terr', (e) => e.textContent), /coach’s Google email/);
+await page.type('#a-tcoach', 'Parent@Gmail.com'); await tap(page, '#a-team button'); await w(500);   // parent@gmail.com is an existing member → becomes this team's coach
+st = await fbState();
+assert.deepEqual(st.docs.teams.t42, { number: 42, name: 'Fortytwo', createdBy: 'boss@gmail.com' }); assert.match(st.docs.teamSecrets.t42.password, /^[1-9]\d{5}$/);
+assert.equal(st.docs.access['parent@gmail.com'].role, 'coach'); assert.equal(st.docs.access['parent@gmail.com'].teamId, 't42');
+assert.match(await page.$eval('dialog[open]', (d) => d.textContent), new RegExp(st.docs.teamSecrets.t42.password)); await tap(page, 'dialog [data-close]');
+ok('admin adds a team: needs number + name + designated coach; 6-digit team password generated; coach assigned');
+await tap(page, '[data-teampw="t42"]'); await page.waitForSelector('dialog[open] #pw-code');
+const oldPw = await page.$eval('dialog #pw-code', (e) => e.textContent); await page.$eval('dialog #pw-new', (e) => { window.confirm = () => true; e.click(); }); await w(400);
+const newPw = (await fbState()).docs.teamSecrets.t42.password; assert.notEqual(newPw, oldPw); assert.equal(await page.$eval('dialog #pw-code', (e) => e.textContent), newPw);
+await page.type('dialog #pw-custom', 'abc'); await page.$eval('dialog #pw-form button', (e) => e.click()); await w(200); assert.match(await page.$eval('dialog #pw-err', (e) => e.textContent), /at least 6/);
+await tap(page, 'dialog [data-close]'); ok('admin can view and reset any team’s password (custom ones must be 6+ characters)');
+// (parent@gmail.com became coach of t42 — put them back as a member of t1 for the later checks)
+await page.evaluate(() => { globalThis.__fb.docs.access['parent@gmail.com'] = { role: 'member', teamId: 't1', name: 'Sam’s mom', addedBy: 'coach@gmail.com', addedAt: 1 }; });
 await page.type('#a-ue', 'NewJudge@Gmail.com'); await page.select('#a-ur', 'judge'); await tap(page, '#a-user button'); await w(300);
 await page.type('#a-ue', 'second.coach@gmail.com'); await page.select('#a-ur', 'coach'); await page.select('#a-ut', 't1'); await tap(page, '#a-user button'); await w(300);
 await page.type('#a-ue', 'Friend@Gmail.com'); await page.select('#a-ur', 'admin'); await page.type('#a-un', 'Friend'); await tap(page, '#a-user button'); await w(300);

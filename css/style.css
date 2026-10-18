@@ -136,7 +136,9 @@ form .field + .field, form .field + .error, form .error + .btn { margin-top: 12p
 @media (min-width: 820px) { .missions { grid-template-columns: 1fr 1fr; align-items: start; } }
 .mission { padding: 0; overflow: hidden; }
 .mission header { position: relative; }
-.mimg { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; background: var(--accent-soft); max-height: 180px; }
+.mimg { display: block; width: 100%; height: 220px; object-fit: contain; object-position: center; padding: 10px; background: #fff; border-bottom: 1px solid var(--line); } /* contain: show the WHOLE model, never crop */
+@media (min-width: 720px) { .mimg { height: 240px; } }
+[data-theme="dark"] .mimg { background: #f4f6f1; }
 .mtitle { display: flex; align-items: center; gap: 10px; padding: 12px 14px 4px; flex-wrap: wrap; }
 .mtitle h3 { margin: 0; flex: 1 1 140px; font-size: 1.05rem; } .mnum { background: var(--accent); color: var(--accent-ink); font-weight: 800; font-size: .78rem; padding: 3px 8px; border-radius: 8px; }
 .mscore { font-weight: 800; font-variant-numeric: tabular-nums; background: var(--surface2); padding: 3px 10px; border-radius: 99px; }
@@ -261,3 +263,9 @@ button.opt { cursor: pointer; } button.opt:hover:not(:disabled) { background: va
 /* backdrop-filter makes the header a containing block for position:fixed, which pinned the phone tab bar under the header */
 @media (max-width: 719px) { .top { backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--surface); } }
 @media (max-width: 719px) { .nav > a > .nl[data-short] { font-size: 0; } .nav > a > .nl[data-short]::after { content: attr(data-short); font-size: .78rem; } }
+
+.pwbox { display: flex; align-items: center; gap: 12px; margin: 10px 0; flex-wrap: wrap; } .pwbox code { font-size: 2rem; font-weight: 800; letter-spacing: .18em; background: var(--surface2); padding: 8px 16px; border-radius: 12px; user-select: all; }
+.checkrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .checkrow .check { flex: 1; }
+.tl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } @media (max-width: 420px) { .tl-grid { grid-template-columns: 1fr; } }
+.or span { white-space: nowrap; }
+#tl button[type=submit] { margin-top: 12px; }

@@ -29,6 +29,9 @@ await env.withSecurityRulesDisabled(async (c) => {
   await w('events/ev2', { name: 'Other event', live: false });
   await w('eventHosts/ev1', { emails: ['host@x.com', 'coachhost@x.com'] });
   await w('eventHosts/ev2', { emails: ['host2@x.com'] });
+  await w('teamSecrets/t1', { password: '123456', updatedBy: 'admin@x.com', updatedAt: 1 });
+  await w('teamSecrets/t2', { password: '654321', updatedBy: 'admin@x.com', updatedAt: 1 });
+  await w('teamSecrets/t7', { password: '777777', updatedBy: 'host@x.com', updatedAt: 1 });
   await w('teams/t7', { number: 7, name: 'Seven', createdBy: 'host@x.com' });
   await w('teams/t8', { number: 8, name: 'Eight', createdBy: 'host2@x.com' });
   await w('practice/p1', { uid: 'u-coach', teamId: 't1', total: 100 });
@@ -37,6 +40,7 @@ await env.withSecurityRulesDisabled(async (c) => {
   await w('eventJudges/ev1', { emails: ['coach2@x.com'] });
   await w('scores/ev1_t1_R1', { eventId: 'ev1', teamId: 't1', round: 1, total: 100, gp: 3, hasSignature: true, judgeUid: 'u-judge' });
 });
+const anonCtx = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'anonymous' } }).firestore();
 const as = (uid, email, verified = true) => env.authenticatedContext(uid, { email, email_verified: verified }).firestore();
 const anon = env.unauthenticatedContext().firestore();
 const admin = as('u-admin', 'admin@x.com'), judge = as('u-judge', 'judge@x.com'), coach = as('u-coach', 'coach@x.com'), coach2 = as('u-coach2', 'coach2@x.com');
@@ -89,13 +93,13 @@ await assertFails(updateDoc(doc(coach, 'teams/t1'), { number: 99 })); await asse
 await assertFails(updateDoc(doc(coach, 'teams/t2'), { name: 'Hijack' })); await assertFails(updateDoc(doc(coach, 'teams/t1'), { name: '' })); await assertFails(deleteDoc(doc(coach, 'teams/t1')));
 ok('coach renames their own team only (never the number, never another team, never to blank)');
 await assertSucceeds(setDoc(doc(coach, 'access/parent@gmail.com'), { role: 'member', teamId: 't1', name: 'Mom', addedBy: 'coach@x.com', addedAt: 1 }));
-await assertFails(setDoc(doc(coach, 'access/x1@gmail.com'), { role: 'coach', teamId: 't1', addedBy: 'coach@x.com', addedAt: 1 }));
+await assertSucceeds(setDoc(doc(coach, 'access/x1@gmail.com'), { role: 'coach', teamId: 't1', addedBy: 'coach@x.com', addedAt: 1 })); // coaches may add coaches (own team)
 await assertFails(setDoc(doc(coach, 'access/x2@gmail.com'), { role: 'admin', addedBy: 'coach@x.com', addedAt: 1 }));
 await assertFails(setDoc(doc(coach, 'access/x3@gmail.com'), { role: 'member', teamId: 't2', addedBy: 'coach@x.com', addedAt: 1 }));
 await assertFails(setDoc(doc(coach, 'access/x4@gmail.com'), { role: 'member', teamId: 't1', addedBy: 'coach@x.com', addedAt: 1, extra: true }));
 await assertFails(setDoc(doc(coach, 'access/admin@x.com'), { role: 'member', teamId: 't1', addedBy: 'coach@x.com', addedAt: 1 })); // can't take over an admin entry
 await assertFails(setDoc(doc(coach, 'access/Upper@gmail.com'), { role: 'member', teamId: 't1', addedBy: 'coach@x.com', addedAt: 1 }));
-ok('coach adds only plain members to their own team — not coaches, not admins, not other teams, no takeovers');
+ok('coach adds only members/coaches to their own team — not admins, not other teams, no extra fields, no takeovers');
 await assertSucceeds(deleteDoc(doc(coach, 'access/parent@gmail.com'))); await assertFails(deleteDoc(doc(coach, 'access/coach2@x.com'))); await assertFails(deleteDoc(doc(coach, 'access/coach@x.com')));
 ok('coach removes members of their team, not coaches or other teams');
 await assertSucceeds(getDocs(query(collection(coach, 'access'), where('teamId', '==', 't1')))); await assertFails(getDocs(query(collection(coach, 'access'), where('teamId', '==', 't2')))); await assertFails(getDocs(collection(coach, 'access')));
@@ -180,5 +184,38 @@ await assertSucceeds(getDocs(query(collection(coach, 'eventJudges'), where('emai
 ok('people can look up the events they referee, but not the lists');
 await assertSucceeds(getDoc(doc(host, 'signatures/ev1_t1_R1'))); await assertFails(getDoc(doc(host2, 'signatures/ev1_t1_R1'))); await assertFails(getDoc(doc(judge2, 'signatures/ev1_t1_R1'))); await assertSucceeds(getDoc(doc(judge, 'signatures/ev1_t1_R1')));
 ok('signatures are visible to an event’s referees/hosts/admins and unscoped judges — not to other events’ staff');
+// ---- team password sign-in (anonymous session proves it knows the shared password) ----
+const anon1 = anonCtx('anon-1'), anon2 = anonCtx('anon-2');
+await assertSucceeds(setDoc(doc(anon1, 'teamMembers/anon-1'), { teamId: 't1', password: '123456', name: 'Sam', createdAt: 1 }));
+await assertFails(setDoc(doc(anon2, 'teamMembers/anon-2'), { teamId: 't1', password: '000000', name: 'Bad', createdAt: 1 })); await assertFails(setDoc(doc(anon2, 'teamMembers/anon-2'), { teamId: 't1', password: '654321', createdAt: 1 }));
+await assertFails(setDoc(doc(anon2, 'teamMembers/anon-2'), { teamId: 't9', password: '123456', createdAt: 1 })); await assertFails(setDoc(doc(anon2, 'teamMembers/anon-1'), { teamId: 't1', password: '123456', createdAt: 1 }));
+await assertFails(setDoc(doc(anon2, 'teamMembers/anon-2'), { teamId: 't1', password: '123456', createdAt: 1, extra: 1 })); await assertFails(setDoc(doc(coach, 'teamMembers/u-coach'), { teamId: 't1', password: '123456', createdAt: 1 }));
+ok('joining with the team password works only with the right password, for that team, as your own anonymous session (a Google account can’t use it)');
+await assertSucceeds(setDoc(doc(anon1, 'practice/pa1'), { uid: 'anon-1', teamId: 't1', by: 'Sam', total: 90 })); await assertFails(setDoc(doc(anon1, 'practice/pa2'), { uid: 'anon-1', teamId: 't2', total: 90 })); await assertFails(setDoc(doc(anon1, 'practice/pa3'), { uid: 'someone', teamId: 't1', total: 90 }));
+await assertSucceeds(getDocs(query(collection(anon1, 'practice'), where('teamId', '==', 't1')))); await assertFails(getDocs(query(collection(anon1, 'practice'), where('teamId', '==', 't2')))); await assertFails(getDocs(collection(anon1, 'practice')));
+await assertSucceeds(deleteDoc(doc(anon1, 'practice/pa1'))); await assertFails(deleteDoc(doc(anon1, 'practice/p1'))); await assertSucceeds(getDocs(collection(anon1, 'teams'))); await assertSucceeds(getDocs(collection(anon1, 'scores')));
+ok('a team-password member gets exactly member powers for their own team (practice + stats) and the public data');
+await assertFails(setDoc(doc(anon1, 'scores/ev1_t1_R2'), score({ teamId: 't1', round: 2, judgeUid: 'anon-1' }))); await assertFails(setDoc(doc(anon1, 'access/x@gmail.com'), { role: 'admin' })); await assertFails(setDoc(doc(anon1, 'teams/t99'), { number: 99, name: 'x', createdBy: 'a' })); await assertFails(updateDoc(doc(anon1, 'teams/t1'), { name: 'Hijack' }));
+await assertFails(getDoc(doc(anon1, 'teamSecrets/t1'))); await assertFails(getDoc(doc(anon1, 'signatures/ev1_t1_R1'))); await assertFails(setDoc(doc(anon1, 'teamSecrets/t1'), { password: 'newpass', updatedBy: 'x', updatedAt: 1 })); await assertFails(setDoc(doc(anon1, 'events/evX'), { name: 'x' }));
+ok('…and never anything elevated: no scoring, no people, no team edits, cannot read or change the team password');
+await assertSucceeds(getDoc(doc(coach, 'teamSecrets/t1'))); await assertFails(getDoc(doc(coach, 'teamSecrets/t2'))); await assertFails(getDoc(doc(mem, 'teamSecrets/t1'))); await assertFails(getDoc(doc(judge, 'teamSecrets/t1'))); await assertSucceeds(getDoc(doc(admin, 'teamSecrets/t2')));
+await assertSucceeds(setDoc(doc(coach, 'teamSecrets/t1'), { password: '987654', updatedBy: 'coach@x.com', updatedAt: 2 }));
+await assertFails(setDoc(doc(coach, 'teamSecrets/t2'), { password: '987654', updatedBy: 'coach@x.com', updatedAt: 2 })); await assertFails(setDoc(doc(coach, 'teamSecrets/t1'), { password: '123', updatedBy: 'coach@x.com', updatedAt: 2 }));
+await assertFails(setDoc(doc(coach, 'teamSecrets/t1'), { password: 'abcdefg', updatedBy: 'someone@else.com', updatedAt: 2 })); await assertFails(setDoc(doc(coach, 'teamSecrets/t1'), { password: 'abcdefg', updatedBy: 'coach@x.com', updatedAt: 2, x: 1 })); await assertFails(deleteDoc(doc(coach, 'teamSecrets/t1')));
+ok('only that team’s coaches (and admins, and the host who created the team) can read or change the team password');
+await assertSucceeds(getDoc(doc(host, 'teamSecrets/t7'))); await assertFails(getDoc(doc(host, 'teamSecrets/t8'))); await assertFails(getDoc(doc(host, 'teamSecrets/t1'))); await assertSucceeds(setDoc(doc(host, 'teamSecrets/t7'), { password: '135790', updatedBy: 'host@x.com', updatedAt: 3 })); await assertFails(setDoc(doc(host, 'teamSecrets/t8'), { password: '135790', updatedBy: 'host@x.com', updatedAt: 3 }));
+ok('a host manages the password only of teams they created');
+await assertFails(getDocs(query(collection(anon1, 'practice'), where('teamId', '==', 't1')))); await assertFails(setDoc(doc(anon1, 'practice/pa4'), { uid: 'anon-1', teamId: 't1', total: 50 }));
+ok('changing the team password locks every old password session out immediately');
+await assertSucceeds(setDoc(doc(anon1, 'teamMembers/anon-1'), { teamId: 't1', password: '987654', name: 'Sam', createdAt: 2 })); await assertSucceeds(setDoc(doc(anon1, 'practice/pa5'), { uid: 'anon-1', teamId: 't1', by: 'Sam', total: 60 }));
+await assertSucceeds(getDocs(query(collection(coach, 'teamMembers'), where('teamId', '==', 't1')))); await assertFails(getDocs(query(collection(coach, 'teamMembers'), where('teamId', '==', 't2')))); await assertSucceeds(deleteDoc(doc(coach, 'teamMembers/anon-1')));
+ok('signing in again with the new password restores access; coaches can see and remove password members of their team');
+// coaches can add coaches; hosts can set up a coach for a team they created
+await assertSucceeds(setDoc(doc(coach, 'access/cocoach@gmail.com'), { role: 'coach', teamId: 't1', addedBy: 'coach@x.com', addedAt: 1 })); await assertFails(setDoc(doc(coach, 'access/x@gmail.com'), { role: 'admin', teamId: 't1', addedBy: 'coach@x.com', addedAt: 1 })); await assertFails(setDoc(doc(coach, 'access/y@gmail.com'), { role: 'coach', teamId: 't2', addedBy: 'coach@x.com', addedAt: 1 }));
+await assertSucceeds(deleteDoc(doc(coach, 'access/cocoach@gmail.com'))); await assertFails(deleteDoc(doc(coach, 'access/coach@x.com'))); await assertFails(deleteDoc(doc(coach, 'access/coachhost@x.com')));
+ok('a coach can add (and remove) other coaches of their team, but cannot remove themselves or coaches they didn’t add');
+await assertSucceeds(setDoc(doc(host, 'access/designated@gmail.com'), { role: 'coach', teamId: 't7', addedBy: 'host@x.com', addedAt: 1 })); await assertFails(setDoc(doc(host, 'access/designated2@gmail.com'), { role: 'coach', teamId: 't8', addedBy: 'host@x.com', addedAt: 1 })); await assertFails(setDoc(doc(host, 'access/designated3@gmail.com'), { role: 'coach', teamId: 't1', addedBy: 'host@x.com', addedAt: 1 }));
+await assertFails(setDoc(doc(host, 'access/coach@x.com'), { role: 'coach', teamId: 't7', addedBy: 'host@x.com', addedAt: 1 }));
+ok('a host can assign a designated coach to a team they created (new accounts only), not to anyone else’s team');
 await env.cleanup();
 console.log(`\n${passed} emulator checks passed`);
