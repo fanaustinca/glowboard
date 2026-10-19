@@ -1,7 +1,11 @@
 // Pure scoring engine — no DOM, no Firebase. Runs in the browser and in Node tests.
 import {
-  MISSIONS, EQUIPMENT_INSPECTION_POINTS, MAX_TOKENS, TOKEN_POINTS, GP_LEVELS,
+  MISSIONS, FUTURE_MISSIONS, EQUIPMENT_INSPECTION_POINTS, MAX_TOKENS, TOKEN_POINTS, GP_LEVELS, PENALTY_DEDUCTION,
 } from './missions.js';
+
+// Two editions share one engine: Founders (the standard Challenge) and Future. Anything that isn't 'future' is Founders.
+export const editionOf = (x) => ((x && typeof x === 'object' ? x.edition : x) === 'future' ? 'future' : 'founders');
+export const missionsOf = (ed) => (editionOf(ed) === 'future' ? FUTURE_MISSIONS : MISSIONS);
 
 const toInt = (v) => (Number.isFinite(+v) ? Math.trunc(+v) : 0);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, toInt(v)));
@@ -12,12 +16,14 @@ export function defaultMissionState(m) {
   return s;
 }
 
-export function defaultState() {
+export function defaultState(ed = 'founders') {
+  const m = Object.fromEntries(missionsOf(ed).map((x) => [x.id, defaultMissionState(x)]));
+  if (editionOf(ed) === 'future') return { penalties: 0, gp: 3, m };
   return {
     equip: false,
     tokens: MAX_TOKENS, // every match starts with six precision tokens
     gp: 3,
-    m: Object.fromEntries(MISSIONS.map((m) => [m.id, defaultMissionState(m)])),
+    m,
   };
 }
 
@@ -38,8 +44,15 @@ export function normalizeMission(m, input) {
   return s;
 }
 
-export function normalizeState(input) {
+export function normalizeState(input, ed = 'founders') {
   const raw = input && typeof input === 'object' ? input : {};
+  if (editionOf(ed) === 'future') {
+    return {
+      penalties: clamp(raw.penalties, 0, 3),
+      gp: [2, 3, 4].includes(toInt(raw.gp)) ? toInt(raw.gp) : 3,
+      m: Object.fromEntries(FUTURE_MISSIONS.map((m) => [m.id, normalizeMission(m, raw.m?.[m.id])])),
+    };
+  }
   return {
     equip: raw.equip === true,
     tokens: clamp(raw.tokens ?? MAX_TOKENS, 0, MAX_TOKENS),
@@ -67,13 +80,22 @@ export function scoreMission(m, s) {
 }
 
 // Score a full match. Never throws on odd input: it normalises first.
-export function scoreAll(raw) {
+export function scoreAll(raw, ed = 'founders') {
+  if (editionOf(ed) === 'future') {
+    const st = normalizeState(raw, 'future');
+    const missions = FUTURE_MISSIONS.map((m) => ({ id: m.id, num: m.num, name: m.name, ...scoreMission(m, st.m[m.id]) }));
+    const sum = missions.reduce((a, x) => a + x.points, 0);
+    const zeroed = st.penalties >= 3; // a third interference penalty zeroes the whole match
+    const penaltyPoints = zeroed ? 0 : -PENALTY_DEDUCTION[st.penalties];
+    const total = zeroed ? 0 : Math.max(0, sum + penaltyPoints);
+    return { edition: 'future', state: st, equipment: 0, tokens: 0, missions, penalties: st.penalties, penaltyPoints, zeroed, subtotal: sum, total, gp: st.gp, gpLabel: GP_LEVELS[st.gp] };
+  }
   const st = normalizeState(raw);
   const equipment = st.equip ? EQUIPMENT_INSPECTION_POINTS : 0;
   const tokens = TOKEN_POINTS[st.tokens];
   const missions = MISSIONS.map((m) => ({ id: m.id, num: m.num, name: m.name, ...scoreMission(m, st.m[m.id]) }));
   const total = equipment + tokens + missions.reduce((a, x) => a + x.points, 0);
-  return { state: st, equipment, tokens, missions, total, gp: st.gp, gpLabel: GP_LEVELS[st.gp] };
+  return { edition: 'founders', state: st, equipment, tokens, missions, total, gp: st.gp, gpLabel: GP_LEVELS[st.gp] };
 }
 
 // ---- Maximum possible points (enumerated, so it can never drift from the rules) ----
@@ -87,24 +109,27 @@ function* domain(m, i = 0, cur = {}) {
 }
 export function* missionDomain(m) { for (const d of domain(m)) for (const eq of [false, true]) yield { ...d, eq }; }
 
-let _max;
-export function maxScores() {
-  if (_max) return _max;
+const _max = {};
+export function maxScores(ed = 'founders') {
+  ed = editionOf(ed);
+  if (_max[ed]) return _max[ed];
   const perMission = {};
-  for (const m of MISSIONS) {
+  for (const m of missionsOf(ed)) {
     let best = 0;
     for (const raw of missionDomain(m)) best = Math.max(best, scoreMission(m, normalizeMission(m, raw)).points);
     perMission[m.id] = best;
   }
-  const total = EQUIPMENT_INSPECTION_POINTS + Math.max(...TOKEN_POINTS)
-    + Object.values(perMission).reduce((a, b) => a + b, 0);
-  return (_max = { perMission, total });
+  const sum = Object.values(perMission).reduce((a, b) => a + b, 0);
+  const total = ed === 'future' ? sum : EQUIPMENT_INSPECTION_POINTS + Math.max(...TOKEN_POINTS) + sum;
+  return (_max[ed] = { perMission, total });
 }
 
 // ---- Standings ----
-// Only a team's best official match counts; ties are broken by 2nd then 3rd best.
-// If all three match, teams share a rank (local officials decide).
-export function standings(teams, scores) {
+// Founders: only a team's best official match counts; ties are broken by 2nd then 3rd best.
+// Future: the AVERAGE of a team's official matches decides the rank (Future Rulebook, Scoring).
+// Equal results share a rank (local officials decide). Each row has `value` (the number it is ranked on) and `best`/`avg`.
+export function standings(teams, scores, ed = 'founders') {
+  const future = editionOf(ed) === 'future';
   const byTeam = new Map(teams.map((t) => [t.id, { team: t, rounds: {}, list: [] }]));
   for (const s of scores) {
     const row = byTeam.get(s.teamId);
@@ -114,9 +139,12 @@ export function standings(teams, scores) {
   }
   const rows = [...byTeam.values()].map((r) => {
     const sorted = [...r.list].sort((a, b) => b - a);
-    return { ...r, sorted, best: sorted.length ? sorted[0] : null };
+    const avg = sorted.length ? sorted.reduce((a, b) => a + b, 0) / sorted.length : null;
+    const best = sorted.length ? sorted[0] : null;
+    return { ...r, sorted, best, avg, metric: future ? 'avg' : 'best', value: future ? (avg === null ? null : Math.round(avg * 10) / 10) : best };
   });
   const cmp = (a, b) => {
+    if (future) return Math.round(b.avg * 100) - Math.round(a.avg * 100);
     for (let i = 0; i < 3; i++) {
       const x = a.sorted[i] ?? -1, y = b.sorted[i] ?? -1;
       if (x !== y) return y - x;

@@ -53,7 +53,7 @@ test('referee is a per-event modifier: eventJudges list (admin/host-of-event wri
 });
 test('events: admins create/delete; a host may change ONLY teamIds + schedule of events they host', () => {
   const b = block('events');
-  assert.deepEqual(allow(b, 'create'), ['isAdmin()']); assert.deepEqual(allow(b, 'delete'), ['isAdmin()']); assert.ok(!/isJudgeFor\(resource/.test(allow(b, 'update')[0] + allow(b, 'delete')[0]), 'judges can never replace or delete');
+  assert.deepEqual(allow(b, 'create'), ["isAdmin() && validEditions(request.resource.data.get('editions', ['founders']))"]); assert.deepEqual(allow(b, 'delete'), ['isAdmin()']); assert.ok(!/isJudgeFor\(resource/.test(allow(b, 'update')[0] + allow(b, 'delete')[0]), 'judges can never replace or delete');
   const upd = allow(b, 'update')[0];
   assert.match(upd, /isHostOf\(eventId\)/); assert.match(upd, /affectedKeys\(\)\.hasOnly\(\['teamIds', 'schedule'\]\)/);
 });

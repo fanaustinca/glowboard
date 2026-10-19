@@ -21,9 +21,9 @@ export async function addTeamPerson(store, actor, teamId, email, role, name = ''
 
 // Creates the team, its shared password (ON by default; the coach can turn it off) and its designated coach.
 // coach: 'added' | 'failed' | 'none'
-export async function createTeam(store, actor, { number, name, coachEmail }) {
+export async function createTeam(store, actor, { number, name, coachEmail, edition = 'founders' }) {
   const id = `t${number}`;
-  await store.put('teams', id, { number, name, createdBy: actor.email });
+  await store.put('teams', id, { number, name, edition: edition === 'future' ? 'future' : 'founders', createdBy: actor.email });
   const password = genCode();
   await store.put('teamSecrets', id, { password, enabled: true, isDefault: true, updatedBy: actor.email, updatedAt: Date.now() });
   let coach = 'none';

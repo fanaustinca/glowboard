@@ -1,8 +1,8 @@
 // Team practice analytics. Pure functions over saved practice runs ({ total, state, result, createdAt, by }).
 // "Success" for a mission = the run scored FULL points on it. "Reliable" missions are the ones a team gets right
 // run after run; "least reliable" are the ones it keeps missing — the best things to practise next.
-import { MISSIONS, TOKEN_POINTS, MAX_TOKENS } from './missions.js';
-import { maxScores } from './scoring.js';
+import { TOKEN_POINTS, MAX_TOKENS } from './missions.js';
+import { maxScores, missionsOf, editionOf } from './scoring.js';
 
 const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
 const std = (a) => { if (a.length < 2) return 0; const m = mean(a); return Math.sqrt(mean(a.map((v) => (v - m) ** 2))); };
@@ -33,10 +33,13 @@ function taskStat(field, runs, mid) {
   return { key: field.key, label: field.label, kind: 'seg', rate: pct(vals.filter((v) => v === best.v).length, runs.length) };
 }
 
-export function computeStats(runsIn) {
+// `ed` = which edition's runs these are (they must all be the same edition; callers filter).
+export function computeStats(runsIn, ed = 'founders') {
+  ed = editionOf(ed);
+  const MISSIONS = missionsOf(ed);
   const runs = runsIn.slice().sort((a, b) => a.createdAt - b.createdAt);
   const n = runs.length;
-  const mx = maxScores();
+  const mx = maxScores(ed);
   const totals = runs.map((r) => r.total);
   const last5 = totals.slice(-5), prev5 = totals.slice(-10, -5);
   const overall = {
@@ -66,7 +69,7 @@ export function computeStats(runsIn) {
   const inconsistent = ranked.filter((m) => m.n >= 3 && m.std > 0).sort((a, b) => b.std / b.max - a.std / a.max || a.num - b.num);
   const tasks = missions.flatMap((m) => m.tasks.map((t) => ({ ...t, mission: m.name, num: m.num, mid: m.id })));
   return {
-    overall, equip, tokens, missions,
+    edition: ed, overall, equip, tokens, missions,
     mostReliable: byReliable.slice(0, 3), leastReliable: byUnreliable.slice(0, 3),
     neverFull: ranked.filter((m) => m.fullRate === 0).sort((a, b) => a.avgPct - b.avgPct),
     inconsistent: inconsistent.slice(0, 3),
@@ -87,9 +90,11 @@ const slope = (y) => {
 };
 const dayKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
-export function computeSeries(runsIn, win = 5, officialIn = []) {
+export function computeSeries(runsIn, win = 5, officialIn = [], ed = 'founders') {
+  ed = editionOf(ed);
+  const MISSIONS = missionsOf(ed);
   const runs = runsIn.slice().sort((a, b) => a.createdAt - b.createdAt);
-  const n = runs.length, mx = maxScores();
+  const n = runs.length, mx = maxScores(ed);
   const totals = runs.map((r) => r.total);
   const roll = rollMean(totals, win), rstd = rollStd(totals, win);
   let top = -Infinity;
@@ -119,7 +124,7 @@ export function computeSeries(runsIn, win = 5, officialIn = []) {
   const byDay = [...days].map(([day, v]) => ({ day, runs: v.length, avg: mean(v), best: Math.max(...v) }));
   const official = officialIn.slice().sort((a, b) => a.round - b.round).map((s) => ({ round: s.round, total: s.total, event: s.eventName || '' }));
   return {
-    n, max: mx.total, win, rows, per, hist, byDay, official,
+    edition: ed, n, max: mx.total, win, rows, per, hist, byDay, official,
     rolling: { score: roll, std: rstd, missionsFull: rollMean(missionsFull, win), equip: rollMean(equip, win), tokens: rollMean(tokensLeft, win) },
     improvement: { slope: slope(totals), firstHalf: mean(totals.slice(0, h || 1)), lastHalf: mean(totals.slice(h)), change: n > 1 ? totals[n - 1] - totals[0] : 0, best: n ? Math.max(...totals) : 0 },
   };
@@ -129,15 +134,16 @@ export function computeSeries(runsIn, win = 5, officialIn = []) {
 export function seriesTables(s) {
   const f = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : '');
   const when = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
+  const fut = s.edition === 'future';
   const mcols = s.per.map((m) => `M${String(m.num).padStart(2, '0')} ${m.name}`);
   return {
-    runs: [['Run', 'Date', 'By', 'Note', 'Score', 'Change vs previous', `Rolling avg (${s.win})`, 'Best so far', '% of max', 'Equipment inspection', 'Tokens left', '% missions full marks', `Rolling std (${s.win})`, ...mcols],
-      ...s.rows.map((r) => [r.i, when(r.t), r.by, r.note, r.total, r.delta, f(r.rolling), r.best, f(r.pctMax), r.equip, r.tokens, f(r.missionsFull), f(r.std), ...s.per.map((m) => r.pts[m.id])])],
+    runs: [['Run', 'Date', 'By', 'Note', 'Score', 'Change vs previous', `Rolling avg (${s.win})`, 'Best so far', '% of max', ...(fut ? [] : ['Equipment inspection', 'Tokens left']), '% missions full marks', `Rolling std (${s.win})`, ...mcols],
+      ...s.rows.map((r) => [r.i, when(r.t), r.by, r.note, r.total, r.delta, f(r.rolling), r.best, f(r.pctMax), ...(fut ? [] : [r.equip, r.tokens]), f(r.missionsFull), f(r.std), ...s.per.map((m) => r.pts[m.id])])],
     score: [['Run', 'Score', `Rolling avg (${s.win})`, 'Best so far'], ...s.rows.map((r) => [r.i, r.total, f(r.rolling), r.best])],
     gain: [['Run', 'Change vs previous run'], ...s.rows.map((r) => [r.i, r.delta])],
     missionRate: [['Run', ...mcols.map((c) => `${c} (rolling ${s.win} full-marks %)`)], ...s.rows.map((r, i) => [r.i, ...s.per.map((m) => f(m.rollFull[i]))])],
     heatmap: [['Run', ...mcols.map((c) => `${c} (% of max)`)], ...s.rows.map((r, i) => [r.i, ...s.per.map((m) => f(m.pct[i]))])],
-    overall: [['Run', `% missions full marks (rolling ${s.win})`, `Equipment inspection % (rolling ${s.win})`, `Tokens left (rolling ${s.win})`], ...s.rows.map((r, i) => [r.i, f(s.rolling.missionsFull[i]), f(s.rolling.equip[i]), f(s.rolling.tokens[i])])],
+    overall: [['Run', `% missions full marks (rolling ${s.win})`, ...(fut ? [] : [`Equipment inspection % (rolling ${s.win})`, `Tokens left (rolling ${s.win})`])], ...s.rows.map((r, i) => [r.i, f(s.rolling.missionsFull[i]), ...(fut ? [] : [f(s.rolling.equip[i]), f(s.rolling.tokens[i])])])],
     missions: [['Mission', 'Max points', 'Average % of max', 'Full-marks rate %', 'First half avg %', 'Second half avg %', 'Trend (% per run)'],
       ...s.per.map((m, i) => [mcols[i], m.max, f(m.avgPct), f(m.fullRate), f(m.firstHalf), f(m.lastHalf), f(m.slope)])],
     histogram: [['Score from', 'Score to', 'Runs'], ...s.hist.map((b) => [b.from, b.to, b.count])],

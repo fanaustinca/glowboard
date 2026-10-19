@@ -26,7 +26,7 @@ const browser = await puppeteer.launch({ executablePath: CHROME, headless: true,
 let passed = 0, failed = 0;
 const problems = [];
 const ok = (n) => { passed++; console.log('  ok  ' + n); };
-const bad = (n, e) => { failed++; problems.push(n); console.log('  FAIL ' + n + '\n       ' + String(e.message || e).split('\n').join('\n       ')); };
+const bad = (n, e) => { failed++; problems.push(n); console.log('  FAIL ' + n + '\n       ' + String((process.env.STACK ? e.stack : e.message) || e).split('\n').join('\n       ')); };
 const check = async (name, fn) => { try { await fn(); ok(name); } catch (e) { bad(name, e); } };
 
 async function forceDemo(page) {
@@ -419,7 +419,7 @@ await check('admin: events, teams, people & access, CSV, edit score, delete scor
     await new Promise((r) => setTimeout(r, 200)); return captured;
   });
   const lines = csv.trim().split('\n');
-  assert.ok(lines[0].startsWith('event,team_number,team_name,match,total'), 'csv header');
+  assert.ok(lines[0].startsWith('event,edition,team_number,team_name,match,total'), 'csv header');
   assert.ok(lines.length > 15, 'csv has rows');
   page.on('dialog', (d) => d.accept());
   const n0 = (await page.$$('#a-scores tr')).length;
@@ -604,6 +604,70 @@ await check('Teams tab (demo): several teams with a role per team, add by number
   assert.match(await text(page, 'dialog[open]'), /Please change your team password[\s\S]*Canopy Coders/); await shot(page, 'flow-pw-reminder');
   await page.$eval('dialog [data-pwkeep]', (e) => e.click()); await page.waitForFunction(() => !document.querySelector('dialog[open]'));
   await page.evaluate(() => document.getElementById('signout').click());
+});
+await check('Future Edition: scoring tool, penalties, mission images, an event running both editions with split leaderboards + big screen, judges score either edition', async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const ed = () => page.$eval('#sc-ed [aria-checked="true"]', (e) => e.dataset.ed);
+  // scoring tool: Founders by default, Future on request
+  await page.evaluate(() => document.getElementById('signout').click()); await wait(150);
+  await goHash(page, 'tool');
+  assert.equal(await ed(), 'founders'); assert.ok(await page.$('#sc-equip')); assert.equal((await page.$$('.mission')).length, 15);
+  await tap(page, '#sc-ed [data-ed="future"]'); await wait(100);
+  assert.equal(await ed(), 'future'); assert.equal((await page.$$('.mission')).length, 6); assert.equal(await page.$('#sc-equip'), null, 'no equipment inspection in Future'); assert.equal(await page.$('#sc-tokens'), null, 'no precision tokens in Future');
+  assert.deepEqual(await page.$$eval('.mission h3', (h) => h.map((x) => x.textContent)), ['Mighty Microbiomes', 'Roots of Renewal', 'Cave Waterfall', 'Rainforest Awakening', 'Central Haven', 'Level Up: Invasive Attack']);
+  await page.$$eval('img.mimg', (im) => im.forEach((i) => { i.loading = 'eager'; })); // they are lazy-loaded below the fold
+  await page.waitForFunction(() => [...document.querySelectorAll('img.mimg')].every((i) => i.complete));
+  assert.ok(await page.$$eval('img.mimg', (im) => im.every((i) => i.naturalWidth > 0 && /\/f0\d\.jpg$/.test(i.getAttribute('src')))), 'every Future mission shows its picture');
+  const inc = (m, k, n) => page.evaluate((m2, k2, n2) => { for (let i = 0; i < n2; i++) document.querySelector(`[data-m="${m2}"][data-k="${k2}"] [data-act="inc"]`).click(); }, m, k, n);
+  await inc('f03', 'cycled', 4); assert.equal(await total(), 20);
+  await inc('f01', 'young', 3); await tap(page, sc('f01', 'queen')); assert.equal(await total(), 20 + 60 + 40);
+  await tap(page, '#sc-pen [data-i="1"]'); assert.equal(await total(), 110);
+  await tap(page, '#sc-pen [data-i="2"]'); assert.equal(await total(), 90);
+  await tap(page, '#sc-pen [data-i="3"]'); assert.equal(await total(), 0); assert.match(await text(page, '#rv-body'), /third penalty/);
+  await tap(page, '#sc-pen [data-i="0"]'); assert.equal(await total(), 120);
+  await tap(page, '#sc-ed [data-ed="founders"]'); await wait(100); assert.equal(await total(), 50, 'Founders keeps its own form'); await tap(page, '#sc-ed [data-ed="future"]'); await wait(100); assert.equal(await total(), 120, 'and Future remembers its form');
+  assert.equal(await page.$('#sc-submit'), null, 'the tool still saves nothing');
+  // admin: an event running both editions, one team of each
+  await login(page, 'admin@demo.test'); await goHash(page, 'admin');
+  await page.type('#a-evn', 'Both Cup'); await page.select('#a-eved', 'both'); await page.$eval('#a-ev button', (e) => e.click()); await wait(200);
+  assert.match(await text(page, '#a-events'), /Both Cup[\s\S]*Founders \+ Future/);
+  for (const [n, name, edn] of [['9001', 'Future Foxes', 'future'], ['9002', 'Founder Frogs', 'founders']]) {
+    await page.$eval('#a-tn', (e) => { e.value = ''; }); await page.type('#a-tn', n); await page.$eval('#a-tname', (e) => { e.value = ''; }); await page.type('#a-tname', name);
+    await page.select('#a-ted', edn); await page.$eval('#a-tcoach', (e) => { e.value = ''; }); await page.type('#a-tcoach', `c${n}@gmail.com`);
+    await page.$eval('#a-team button', (e) => e.click()); await page.waitForSelector('dialog[open]'); await page.$eval('dialog [data-close]', (e) => e.click()); await wait(100);
+  }
+  assert.match(await text(page, '#a-teams'), /Future Foxes[\s\S]*Future/);
+  const both = await page.$$eval('#a-events li', (l) => l.find((x) => /Both Cup/.test(x.textContent)).querySelector('[data-evlive]')?.dataset.evlive);
+  if (both) { await page.$eval(`[data-evlive="${both}"]`, (e) => e.click()); await wait(150); }
+  // judge: Founders by default, Future on request; team list follows the edition
+  await goHash(page, 'judge'); await page.waitForSelector('#sc-event');
+  const evId = await page.$$eval('#sc-event option', (o) => o.find((x) => /Both Cup/.test(x.textContent)).value); await page.select('#sc-event', evId); await wait(100);
+  assert.equal(await ed(), 'founders', 'standard edition is the default');
+  assert.ok((await page.$$eval('#sc-team option', (o) => o.map((x) => x.textContent))).some((t) => /9002/.test(t))); assert.ok(!(await page.$$eval('#sc-team option', (o) => o.map((x) => x.textContent))).some((t) => /9001/.test(t)), 'Future teams are not offered for Founders scoring');
+  await tap(page, '#sc-ed [data-ed="future"]'); await wait(100);
+  assert.ok((await page.$$eval('#sc-team option', (o) => o.map((x) => x.textContent))).some((t) => /9001/.test(t)));
+  await page.select('#sc-team', 't9001'); await inc('f03', 'cycled', 10); await inc('f04', 'species', 0).catch(() => {}); await tap(page, sc('f04', 'species'));
+  await tap(page, '#sc-pen [data-i="1"]'); assert.equal(await total(), 50 + 30 - 10);
+  await page.type('#sc-initials', 'ff');
+  await page.evaluate(() => document.getElementById('sc-sig').scrollIntoView({ block: 'center' }));
+  const sb = await (await page.$('#sc-sig')).boundingBox(); await page.mouse.move(sb.x + 20, sb.y + 40); await page.mouse.down();
+  for (let i = 0; i < 10; i++) await page.mouse.move(sb.x + 20 + i * 15, sb.y + 40 + Math.sin(i) * 25); await page.mouse.up();
+  await page.$eval('#sc-agree', (e) => e.click()); await page.$eval('#sc-submit', (e) => e.click());
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast.ok')].some((t) => /Future Foxes[\s\S]*70 pts/.test(t.textContent)), { timeout: 4000 });
+  const saved = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('glowboard-demo-v2')).scores).find((x) => x.teamId === 't9001'));
+  assert.equal(saved.edition, 'future'); assert.equal(saved.total, 70); assert.equal(saved.result.edition, 'future'); assert.equal(saved.result.penalties, 1);
+  // leaderboards: one per edition; Future ranked by average
+  await goHash(page, ''); await page.waitForSelector('.standings'); await page.select('#d-ev', evId); await wait(100);
+  assert.deepEqual(await page.$$eval('.standings', (o) => o.map((x) => x.dataset.ed)), ['founders', 'future']);
+  assert.match(await text(page, '.standings[data-ed="future"]'), /Future Foxes[\s\S]*70[\s\S]*avg/);
+  await tap(page, '#d-big'); await page.waitForSelector('.bs .bs-board');
+  assert.deepEqual(await page.$$eval('.bs-board', (b) => b.map((x) => x.dataset.ed)), ['founders', 'future']); assert.ok(await page.$('.bs-body.split'));
+  const geo = await page.evaluate(() => { const bs = [...document.querySelectorAll('.bs-board')].map((b) => b.getBoundingClientRect()); return { leftOfRight: bs[0].right <= bs[1].left + 1, fits: [...document.querySelectorAll('.bs-table')].every((t) => { const l = t.lastElementChild.getBoundingClientRect(), tr = t.getBoundingClientRect(); return l.bottom <= tr.bottom + 1; }) };});
+  assert.ok(geo.leftOfRight, 'Founders on the left, Future on the right'); assert.ok(geo.fits, 'every team of both boards fits');
+  assert.equal(await page.$$eval('.bs-h .bs-n', (e) => e.filter((x) => x.scrollWidth > x.clientWidth + 1).length), 0, 'the Match headings are never cut off');
+  assert.match(await text(page, '.bs-board[data-ed="future"] .bs-h'), /AVG|Avg/i);
+  await page.keyboard.press('Escape'); await wait(100);
+  await page.$eval('#signout', (e) => e.click());
 });
 await check('theme toggle switches and persists', async () => {
   await page.$eval('#theme', (e) => e.click());

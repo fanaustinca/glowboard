@@ -92,9 +92,16 @@ service cloud.firestore {
         && d.updatedBy == request.auth.token.email;
     }
 
-    // Highest possible Robot Game score is well under 1000 (see js/scoring.js maxScores()).
+    // Highest possible Robot Game score is under 1100 in either edition (see js/scoring.js maxScores()).
     function validTotal(v) {
-      return v is int && v >= 0 && v <= 1000;
+      return v is int && v >= 0 && v <= 1500;
+    }
+    // Editions: 'founders' (standard) and 'future'. Missing = founders (data from before editions existed).
+    function validEdition(v) {
+      return v in ['founders', 'future'];
+    }
+    function validEditions(l) {
+      return l is list && l.size() >= 1 && l.size() <= 2 && l.hasOnly(['founders', 'future']);
     }
     function validName(v) {
       return v is string && v.size() > 0 && v.size() <= 60;
@@ -108,7 +115,7 @@ service cloud.firestore {
         && (c.size() < 1 || hexColor(c[0])) && (c.size() < 2 || hexColor(c[1])) && (c.size() < 3 || hexColor(c[2]));
     }
     function validTeam(d) {
-      return d.number is int && d.number > 0 && validName(d.name) && validColors(d.get('colors', []));
+      return d.number is int && d.number > 0 && validName(d.name) && validColors(d.get('colors', [])) && validEdition(d.get('edition', 'founders'));
     }
 
     match /access/{email} {
@@ -218,7 +225,8 @@ service cloud.firestore {
 
     match /events/{eventId} {
       allow read: if true;
-      allow create, delete: if isAdmin();
+      allow create: if isAdmin() && validEditions(request.resource.data.get('editions', ['founders']));
+      allow delete: if isAdmin();
       // A host may only change the team list and the schedule of an event they host.
       allow update: if isAdmin()
         || (isHostOf(eventId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamIds', 'schedule']));
@@ -251,6 +259,7 @@ service cloud.firestore {
         && scoreId == request.resource.data.eventId + '_' + request.resource.data.teamId + '_R' + string(request.resource.data.round)
         && validTotal(request.resource.data.total)
         && request.resource.data.gp in [2, 3, 4]
+        && validEdition(request.resource.data.get('edition', 'founders'))
         && request.resource.data.hasSignature == true
         && exists(/databases/$(database)/documents/events/$(request.resource.data.eventId))
         && exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId));
@@ -276,6 +285,7 @@ service cloud.firestore {
       allow read: if isAdmin() || onTeam(resource.data.teamId);
       allow create: if onTeam(request.resource.data.teamId)
         && request.resource.data.uid == request.auth.uid
+        && validEdition(request.resource.data.get('edition', 'founders'))
         && validTotal(request.resource.data.total);
       // Anyone on the team can edit or delete the team's practice runs.
       allow delete: if isAdmin() || onTeam(resource.data.teamId);

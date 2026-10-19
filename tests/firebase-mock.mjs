@@ -169,7 +169,7 @@ await page.type('#e-tname', 'Hosted Team'); await tap(page, '#e-team button'); a
 ok('host form requires a number, a name AND a designated coach');
 await page.type('#e-tcoach', 'Designated@Gmail.com'); await tap(page, '#e-team button'); await w(500);
 st = await fbState();
-assert.deepEqual(st.docs.teams.t77, { number: 77, name: 'Hosted Team', createdBy: 'host@gmail.com' });
+assert.deepEqual(st.docs.teams.t77, { number: 77, name: 'Hosted Team', edition: 'founders', createdBy: 'host@gmail.com' });
 assert.match(st.docs.teamSecrets.t77.password, /^[1-9]\d{5}$/); assert.equal(st.docs.teamSecrets.t77.updatedBy, 'host@gmail.com');
 assert.deepEqual({ ...st.docs.access['designated@gmail.com'], addedAt: 0 }, { role: 'coach', teamId: 't77', name: '', addedBy: 'host@gmail.com', addedAt: 0 });
 assert.equal(st.docs.roster['t77__designated@gmail.com'].role, 'coach'); assert.equal(st.docs.teamSecrets.t77.enabled, true, 'team password is ON by default'); assert.equal(st.docs.teamSecrets.t77.isDefault, true);
@@ -197,7 +197,7 @@ await page.type('#a-tn', '42'); await tap(page, '#a-team button'); await w(100);
 await page.type('#a-tname', 'Fortytwo'); await tap(page, '#a-team button'); await w(100); assert.match(await page.$eval('#a-terr', (e) => e.textContent), /coach’s Google email/);
 await page.type('#a-tcoach', 'Parent@Gmail.com'); await tap(page, '#a-team button'); await w(500);   // parent@gmail.com is an existing member → becomes this team's coach
 st = await fbState();
-assert.deepEqual(st.docs.teams.t42, { number: 42, name: 'Fortytwo', createdBy: 'boss@gmail.com' }); assert.match(st.docs.teamSecrets.t42.password, /^[1-9]\d{5}$/);
+assert.deepEqual(st.docs.teams.t42, { number: 42, name: 'Fortytwo', edition: 'founders', createdBy: 'boss@gmail.com' }); assert.match(st.docs.teamSecrets.t42.password, /^[1-9]\d{5}$/);
 assert.equal(st.docs.access['parent@gmail.com'].role, 'member', 'existing account untouched'); assert.equal(st.docs.roster['t42__parent@gmail.com'].role, 'coach'); assert.equal(st.docs.roster['t1__parent@gmail.com'].role, 'member', 'still just a member of t1');
 assert.match(await page.$eval('dialog[open]', (d) => d.textContent), new RegExp(st.docs.teamSecrets.t42.password)); await tap(page, 'dialog [data-close]');
 ok('admin adds a team: needs number + name + designated coach; 6-digit team password generated; an existing member becomes coach of THIS team only');

@@ -3,6 +3,7 @@
 //   npx -y -p firebase-tools@13 -p @firebase/rules-unit-testing@3 -p firebase@10 firebase emulators:exec --only firestore --project demo-glow "node tests/rules-emulator.mjs"
 // (set NODE_PATH to wherever those packages are installed if node can't resolve them)
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { setDoc, getDoc, getDocs, updateDoc, deleteDoc, doc, collection, query, where, writeBatch } from 'firebase/firestore';
 import { scoreAll, defaultState } from '../js/scoring.js';
@@ -301,6 +302,29 @@ ok('the pro coach now coaches t3 and t7 at once');
   await can('host deletes signature', deleteDoc(doc(host2, 'signatures/ev2_t3_R1'))); await can('host deletes score', deleteDoc(doc(host2, 'scores/ev2_t3_R1')));
   await can('judge scores the match again after the host deleted it', submit(judge, 'ev2', 't3', 1, 'u-judge'));
   ok('judges (unscoped, event-limited), hosts, listed referees and admins can submit the real app payload; members/anon/other events cannot; no replacing — a host deletes first');
+
+  // ── editions: Founders (standard) + Future ──
+  const fst = defaultState('future'); fst.m.f03.cycled = 50; fst.m.f01.young = 3; fst.m.f01.grand = 3; fst.m.f01.hollow = 3; fst.m.f01.queen = true; fst.m.f02.base = 15; fst.m.f02.canopy = 15; fst.m.f06.added = 5; fst.m.f06.contained = 6; fst.m.f04.species = true; fst.m.f04.resources = true; fst.m.f05.haven = 20;
+  const fres = scoreAll(fst, 'future');
+  assert.ok(fres.total > 1000, 'a legal Future maximum is above the old 1000 cap');
+  const fpayload = (eventId, teamId, round, uid, o = {}) => ({ ...payload(eventId, teamId, round, uid), edition: 'future', total: fres.total, gp: fres.gp, state: fres.state, result: slim(fres), ...o });
+  const fsubmit = (db, eventId, teamId, round, uid, o) => { const id = `${eventId}_${teamId}_R${round}`; const b = writeBatch(db); b.set(doc(db, 'scores', id), fpayload(eventId, teamId, round, uid, o)); b.set(doc(db, 'signatures', id), { signature: sig, judgeUid: uid, createdAt: Date.now() }); return b.commit(); };
+  await can('judge submits a Future score (above 1000)', fsubmit(judge, 'ev2', 't7', 1, 'u-judge'));
+  await cannot('a made-up edition', fsubmit(judge, 'ev2', 't7', 2, 'u-judge', { edition: 'bogus' }));
+  await cannot('a total above 1500', fsubmit(judge, 'ev2', 't7', 2, 'u-judge', { total: 1501 }));
+  await can('a score with no edition field (data from before editions)', submit(judge, 'ev2', 't7', 3, 'u-judge'));
+  await can('admin creates a Future team', setDoc(doc(admin, 'teams/t30'), { number: 30, name: 'Thirty', edition: 'future', createdBy: 'admin@x.com' }));
+  await cannot('admin creates a team with a made-up edition', setDoc(doc(admin, 'teams/t31'), { number: 31, name: 'ThirtyOne', edition: 'bogus', createdBy: 'admin@x.com' }));
+  await can('host creates a Future team', setDoc(doc(host, 'teams/t32'), { number: 32, name: 'ThirtyTwo', edition: 'future', createdBy: 'host@x.com' }));
+  await can('admin switches a team’s edition', updateDoc(doc(admin, 'teams/t30'), { edition: 'founders' })); await cannot('…but not to a made-up one', updateDoc(doc(admin, 'teams/t30'), { edition: 'bogus' }));
+  await cannot('a host cannot change a team’s edition', updateDoc(doc(host, 'teams/t32'), { edition: 'founders' })); await cannot('a coach cannot change their team’s edition', updateDoc(doc(coach, 'teams/t1'), { edition: 'future' }));
+  await can('admin creates an event for Future only', setDoc(doc(admin, 'events/evF'), { name: 'Future Day', editions: ['future'] })); await can('…for both editions', setDoc(doc(admin, 'events/evB'), { name: 'Both Day', editions: ['founders', 'future'] }));
+  await can('…and an event with no editions field (Founders)', setDoc(doc(admin, 'events/evOld'), { name: 'Old style' }));
+  await cannot('an event with a made-up edition', setDoc(doc(admin, 'events/evX'), { name: 'X', editions: ['bogus'] })); await cannot('an event with an empty edition list', setDoc(doc(admin, 'events/evY'), { name: 'Y', editions: [] }));
+  await cannot('an event listing editions three times', setDoc(doc(admin, 'events/evZ'), { name: 'Z', editions: ['future', 'future', 'founders'] }));
+  await can('a team member saves a Future practice run', setDoc(doc(coach, 'practice/pf1'), { uid: 'u-coach', teamId: 't1', total: 1100, edition: 'future', createdAt: 5 }));
+  await cannot('…but not with a made-up edition', setDoc(doc(coach, 'practice/pf2'), { uid: 'u-coach', teamId: 't1', total: 10, edition: 'bogus', createdAt: 5 }));
+  ok('editions: Future scores/practice runs/teams/events validate; only admins create events and switch a team’s edition');
 }
 await env.cleanup();
 console.log(`\n${passed} emulator checks passed`);

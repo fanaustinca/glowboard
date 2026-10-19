@@ -1,6 +1,9 @@
 // Analytics page: over-time charts + an animated, sortable data table for the active team's practice runs.
 // Every chart/table has a "Copy data" button that puts a tab-separated table on the clipboard (pastes into Google Sheets).
 import { computeSeries, seriesTables, filterRuns } from './stats.js';
+import { editionOf } from './scoring.js';
+import { EDITIONS } from './missions.js';
+import { teamEdition } from './store.js';
 import { copyForSheets, downloadCSV } from './sheets.js';
 import { toCSV, toTSV } from './schedule.js';
 import { esc, toast } from './ui.js';
@@ -60,22 +63,29 @@ export function analyticsView(root, ctx) {
   const u = ctx.user();
   if (!u?.teamId) return { destroy() {} };
   root.innerHTML = '<div id="an"></div>';
-  let runs = [], range = 'all', win = 5, sortKey = 'i', sortDir = 1, picked = null, series = null, tables = null, anim = true;
+  let allRuns = [], range = 'all', edSel = null, win = 5, sortKey = 'i', sortDir = 1, picked = null, series = null, tables = null, anim = true;
   const el = root.querySelector('#an');
 
   const copyBtn = (key) => `<span class="row-actions"><button class="btn ghost small" data-copy="${key}">Copy data</button><button class="btn ghost small" data-csv="${key}">CSV</button></span>`;
   const card = (key, body, note = '') => `<section class="card"><div class="cardhead"><h2>${esc(CARD_TITLES[key])}</h2>${copyBtn(key)}</div>${note ? `<p class="muted small">${note}</p>` : ''}${body}</section>`;
 
+  // The runs of the edition being analysed: the team's own edition unless it only has runs in the other one (or you pick).
+  const present = () => [...new Set(allRuns.map(editionOf))];
+  const curEd = () => {
+    const teamEd = teamEdition(ctx.teams().find((t) => t.id === u.teamId)), p = present();
+    return edSel && p.includes(edSel) ? edSel : p.includes(teamEd) || !p.length ? teamEd : p[0];
+  };
   function compute() {
-    const set = filterRuns(runs, range);
-    const official = ctx.scores().filter((x) => x.teamId === u.teamId);
-    series = computeSeries(set, win, official); tables = seriesTables(series);
+    const ed = curEd();
+    const set = filterRuns(allRuns.filter((r) => editionOf(r) === ed), range);
+    const official = ctx.scores().filter((x) => x.teamId === u.teamId && editionOf(x) === ed);
+    series = computeSeries(set, win, official, ed); tables = seriesTables(series);
     if (!picked) picked = new Set(series.per.slice().sort((a, b) => b.avgPct - a.avgPct).slice(0, 5).map((m) => m.id));
   }
 
   function tableHTML() {
     const s = series;
-    const cols = [['i', 'Run'], ['t', 'Date'], ['total', 'Score'], ['delta', 'Change'], ['rolling', `Avg (${s.win})`], ['best', 'Best so far'], ['pctMax', '% of max'], ['equip', 'Equip.'], ['tokens', 'Tokens'], ['missionsFull', '% full'],
+    const cols = [['i', 'Run'], ['t', 'Date'], ['total', 'Score'], ['delta', 'Change'], ['rolling', `Avg (${s.win})`], ['best', 'Best so far'], ['pctMax', '% of max'], ...(s.edition === 'future' ? [] : [['equip', 'Equip.'], ['tokens', 'Tokens']]), ['missionsFull', '% full'],
       ...s.per.map((m) => [`m:${m.id}`, `M${String(m.num).padStart(2, '0')}`])];
     const val = (r, k) => (k.startsWith('m:') ? r.pts[k.slice(2)] : r[k]);
     const rows = s.rows.slice().sort((a, b) => (val(a, sortKey) - val(b, sortKey)) * sortDir);
@@ -101,6 +111,7 @@ export function analyticsView(root, ctx) {
     const gainBest = Math.max(...s.rows.map((r) => r.delta));
     el.innerHTML = `
       <div class="toolbar">
+        ${present().length > 1 ? `<label class="field evsel"><span>Edition</span><select id="an-ed">${present().map((x) => `<option value="${x}" ${x === s.edition ? 'selected' : ''}>${EDITIONS[x].long}</option>`).join('')}</select></label>` : ''}
         <label class="field evsel"><span>Runs</span><select id="an-range">${[['all', 'All runs'], ['10', 'Last 10'], ['20', 'Last 20'], ['50', 'Last 50']].map(([v, l]) => `<option value="${v}" ${range === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <label class="field evsel"><span>Rolling window</span><select id="an-win">${[3, 5, 10].map((v) => `<option value="${v}" ${win === v ? 'selected' : ''}>${v} runs</option>`).join('')}</select></label>
         <span class="row-actions"><button class="btn primary" id="an-copyall">Copy everything for Google Sheets</button><button class="btn ghost" id="an-csvall">Download CSV</button></span></div>
@@ -118,7 +129,7 @@ export function analyticsView(root, ctx) {
         ${lineChart(sel.map((m) => ({ name: `M${String(m.num).padStart(2, '0')} ${m.name}`, vals: m.rollFull, color: COLORS[s.per.indexOf(m) % COLORS.length] })), { ymax: 100, yfmt: (v) => `${v}%`, label: 'Rolling full-marks rate per mission' })}
         <p class="muted small">Share of the last ${s.win} runs where the mission got full marks.</p></section>
       ${card('heatmap', heatmap(s))}
-      ${card('overall', lineChart([{ name: '% missions full marks', vals: s.rolling.missionsFull }, { name: 'Equipment inspection %', vals: s.rolling.equip }, { name: 'Tokens left (of 6, as %)', vals: s.rolling.tokens.map((t) => (t / 6) * 100) }], { ymax: 100, yfmt: (v) => `${v}%`, label: 'Rolling success rates' }))}
+      ${card('overall', lineChart([{ name: '% missions full marks', vals: s.rolling.missionsFull }, ...(s.edition === 'future' ? [] : [{ name: 'Equipment inspection %', vals: s.rolling.equip }, { name: 'Tokens left (of 6, as %)', vals: s.rolling.tokens.map((t) => (t / 6) * 100) }])], { ymax: 100, yfmt: (v) => `${v}%`, label: 'Rolling success rates' }))}
       ${card('missions', `<ul class="bars">${s.per.slice().sort((a, b) => (b.lastHalf - b.firstHalf) - (a.lastHalf - a.firstHalf)).map((m) => `<li><span class="bl">M${String(m.num).padStart(2, '0')} ${esc(m.name)}</span><span class="bt"><i class="grow" style="width:${m.lastHalf}%"></i></span><span class="bv">${r1(m.lastHalf)}%<small> ${sgn(m.lastHalf - m.firstHalf)}</small></span></li>`).join('')}</ul>`, 'Average accuracy in the second half of the runs, and the change from the first half.')}
       <div class="cols">
         ${card('histogram', barChart(s.hist.map((b) => b.count), { labels: s.hist.map((b) => `${b.from}–${b.to}`), label: 'Score distribution' }))}
@@ -139,7 +150,8 @@ export function analyticsView(root, ctx) {
   const allTable = () => Object.keys(CARD_TITLES).filter((k) => tables[k] && (k !== 'official' || series.official.length)).flatMap((k) => [[CARD_TITLES[k]], ...tables[k], []]);
   el.addEventListener('change', (e) => {
     const t = e.target;
-    if (t.id === 'an-range') { range = t.value; picked = null; anim = true; compute(); render(); }
+    if (t.id === 'an-ed') { edSel = t.value; picked = null; anim = true; compute(); render(); }
+    else if (t.id === 'an-range') { range = t.value; picked = null; anim = true; compute(); render(); }
     else if (t.id === 'an-win') { win = +t.value; anim = true; compute(); render(); }
     else if (t.dataset.pick) { t.checked ? picked.add(t.dataset.pick) : picked.delete(t.dataset.pick); render(); }
   });
@@ -153,6 +165,6 @@ export function analyticsView(root, ctx) {
     if (b.id === 'an-csvall') downloadCSV('analytics-all.csv', allTable());
   });
   el.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('th[data-sort]')) { e.preventDefault(); sortBy(e.target.dataset.sort); } });
-  const unsub = ctx.store.subscribe('practice', (r) => { runs = r.filter((x) => x.teamId === u.teamId); compute(); render(); });
+  const unsub = ctx.store.subscribe('practice', (r) => { allRuns = r.filter((x) => x.teamId === u.teamId); compute(); render(); });
   return { update: () => { compute(); render(); }, destroy: unsub };
 }

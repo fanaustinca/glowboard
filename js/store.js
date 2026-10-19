@@ -2,8 +2,8 @@
 //   • FirebaseStore — Google sign-in via Firebase Auth + Firestore (closed system: access/{gmail} allow-list)
 //   • DemoStore     — localStorage, seeded with fake data; mirrors the Firestore rules in firestore.rules
 import { firebaseConfig, FIREBASE_SDK_VERSION, isConfigured } from './firebase-config.js';
-import { scoreAll, defaultState } from './scoring.js';
-import { MISSIONS, MATCHES_PER_TEAM } from './missions.js';
+import { scoreAll, defaultState, editionOf, standings } from './scoring.js';
+import { MISSIONS, MATCHES_PER_TEAM, EDITION_IDS, EDITIONS } from './missions.js';
 
 export const ROLES = ['admin', 'host', 'judge', 'coach', 'member'];
 export const ROLE_LABEL = { admin: 'Admin', host: 'Event host', judge: 'Judge', coach: 'Coach', member: 'Team member' };
@@ -55,7 +55,26 @@ export function composeUser(base, rosterRows, pwRows) {
 export function setActivePref(teamId) { lsSet(ACTIVE_KEY, teamId); }
 export const normEmail = (e) => String(e || '').trim().toLowerCase();
 export const scoreId = (eventId, teamId, round) => `${eventId}_${teamId}_R${round}`;
-export const eventTeams = (ev, teams) => (ev?.teamIds?.length ? teams.filter((t) => ev.teamIds.includes(t.id)) : teams);
+// Which editions an event runs ('founders' and/or 'future'); events made before editions existed are Founders-only.
+export const eventEditions = (ev) => {
+  const e = (Array.isArray(ev?.editions) ? ev.editions : []).filter((x) => EDITION_IDS.includes(x));
+  return e.length ? EDITION_IDS.filter((x) => e.includes(x)) : ['founders'];
+};
+export const teamEdition = (t) => editionOf(t);
+// The teams in an event: its chosen teams (or all) that play one of the event's editions.
+export const eventTeams = (ev, teams) => {
+  const eds = eventEditions(ev);
+  return (ev?.teamIds?.length ? teams.filter((t) => ev.teamIds.includes(t.id)) : teams).filter((t) => eds.includes(teamEdition(t)));
+};
+// One leaderboard per edition the event runs: [{ ed, label, future, rows: standings() }], Founders first.
+export const eventBoards = (ev, teams, scores) => {
+  const evTeams = eventTeams(ev, teams);
+  return eventEditions(ev).map((ed) => ({
+    ed, label: EDITIONS[ed].long, short: EDITIONS[ed].label, future: ed === 'future',
+    rows: standings(evTeams.filter((t) => teamEdition(t) === ed), scores.filter((x) => x.eventId === ev?.id && editionOf(x) === ed), ed),
+  }));
+};
+export const validEditions = (e) => Array.isArray(e) && e.length >= 1 && e.length <= 2 && e.every((x) => EDITION_IDS.includes(x));
 
 const err = (code, message) => Object.assign(new Error(message || code), { code });
 const denied = (m) => err('permission-denied', m || 'Missing or insufficient permissions.');
@@ -148,7 +167,8 @@ function seedDemo() {
 export const initials = (name) => String(name).split(/\s+/).map((w) => w[0]).join('').slice(0, 3).toUpperCase();
 // Keep score docs small: per-mission points + the lines that earned them.
 export const slim = (res) => ({
-  equipment: res.equipment, tokens: res.tokens,
+  edition: editionOf(res), equipment: res.equipment, tokens: res.tokens,
+  ...(res.edition === 'future' ? { penalties: res.penalties, penaltyPoints: res.penaltyPoints, zeroed: res.zeroed } : {}),
   missions: res.missions.map((m) => ({ id: m.id, num: m.num, name: m.name, points: m.points, lines: m.lines, voided: m.voided })),
 });
 
@@ -254,7 +274,8 @@ class DemoStore {
   validTeam(d) {
     const c = d.colors ?? [];
     return Number.isInteger(d.number) && d.number > 0 && typeof d.name === 'string' && d.name.length > 0 && d.name.length <= 60
-      && Array.isArray(c) && c.length <= 3 && c.every((x) => /^#[0-9a-fA-F]{6}$/.test(x));
+      && Array.isArray(c) && c.length <= 3 && c.every((x) => /^#[0-9a-fA-F]{6}$/.test(x))
+      && (d.edition === undefined || EDITION_IDS.includes(d.edition));
   }
 
   // ----- data -----
@@ -320,13 +341,14 @@ class DemoStore {
     } else if (col === 'events') {
       this.need(this.isAdmin);
       if (!String(data.name || '').trim()) throw err('invalid', 'An event needs a name.');
+      if (data.editions !== undefined && !validEditions(data.editions)) throw err('invalid', 'Pick Founders, Future or both.');
     } else if (col === 'scores') {
       this.need((x) => this.judgeFor(x, data.eventId) || this.hostOf(x, data.eventId));
       if (ex) this.need(this.isAdmin);
-      else if (data.judgeUid !== u.uid || data.hasSignature !== true || ![2, 3, 4].includes(data.gp) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1000)) throw denied();
+      else if (data.judgeUid !== u.uid || data.hasSignature !== true || ![2, 3, 4].includes(data.gp) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1500) || !(data.edition === undefined || EDITION_IDS.includes(data.edition))) throw denied();
       if (!this.db.events[data.eventId] || !this.db.teams[data.teamId] || ![1, 2, 3].includes(data.round) || id !== scoreId(data.eventId, data.teamId, data.round)) throw denied();
     } else if (col === 'practice') {
-      if (!this.onTeam(u, data.teamId) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1000)) throw denied();
+      if (!this.onTeam(u, data.teamId) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 1500) || !(data.edition === undefined || EDITION_IDS.includes(data.edition))) throw denied();
       if (ex) { if (!this.onTeam(u, ex.teamId) || data.teamId !== ex.teamId || data.uid !== ex.uid || data.createdAt !== ex.createdAt) throw denied(); }
       else if (data.uid !== u.uid) throw denied();
     } else throw denied();

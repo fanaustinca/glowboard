@@ -177,3 +177,90 @@ export const MISSIONS = RAW.map((m) => ({
 }));
 
 export const MISSION_BY_ID = Object.fromEntries(MISSIONS.map((m) => [m.id, m]));
+
+// ───────────────────────────── FIRST LEGO League Future Edition — BIOGLOW ─────────────────────────────
+// Source: Future Edition Rulebook, Game Missions and Scoresheet (LEGO Education, 2026-27).
+// Founders = the standard Challenge above; Future = the grade 3-8 / 8+ Future Edition with its own missions,
+// penalties (no equipment inspection or precision tokens) and ranking by the AVERAGE of a team's matches.
+export const EDITIONS = {
+  founders: { id: 'founders', label: 'Founders', long: 'Founders (standard)', rank: 'best' },
+  future: { id: 'future', label: 'Future', long: 'Future', rank: 'average' },
+};
+export const EDITION_IDS = Object.keys(EDITIONS);
+export const DEFAULT_EDITION = 'founders';
+// Event setting → which editions it runs.
+export const EVENT_EDITION_CHOICES = [
+  { v: 'founders', label: 'Founders', editions: ['founders'] },
+  { v: 'future', label: 'Future', editions: ['future'] },
+  { v: 'both', label: 'Founders + Future', editions: ['founders', 'future'] },
+];
+
+// The rulebook gives no limit for these piles (only the “max” printed on the scoresheet), so the counters stop at a
+// size that no real match can reach.
+export const FUTURE_COUNTS = { microbiome: 3, canopy: 15, waterfall: 50, base: 15, haven: 20, invasiveAdded: 5, containment: 6 };
+// Interference penalties: 1st = −10, 2nd = −30 in total, 3rd = the match score is zero.
+export const FUTURE_PENALTIES = [
+  { v: 0, label: '0', pts: 0 }, { v: 1, label: '1', pts: -10 }, { v: 2, label: '2', pts: -30 }, { v: 3, label: '3+', pts: null },
+];
+export const PENALTY_DEDUCTION = [0, 10, 30];
+
+const FUTURE_RAW = [
+  {
+    id: 'f01', num: 1, name: 'Mighty Microbiomes',
+    notes: [
+      'Keystone species must be placed loose in the microbiome (not touching equipment) to score.',
+      'The fourth keystone species in the young forest does not score for placement — it triggers the defeat of the invasive queen for the bonus.',
+    ],
+    fields: [
+      cnt('young', 'Keystone species in the young forest microbiome', 20, FUTURE_COUNTS.microbiome),
+      cnt('grand', 'Keystone species in the grand tree microbiome', 20, FUTURE_COUNTS.microbiome),
+      cnt('hollow', 'Keystone species in the hollow tree microbiome', 20, FUTURE_COUNTS.microbiome),
+      chk('queen', 'At least three keystone species in the young forest and the invasive queen on the opposite side of the field is knocked down', 40,
+        { bonus: true, requires: (s) => s.young >= 3 }),
+    ],
+  },
+  {
+    id: 'f02', num: 2, name: 'Roots of Renewal',
+    notes: ['Resources must be cycled up the tree. Placing resources directly into the canopy chamber will not count.'],
+    fields: [
+      cnt('base', 'Resources in the grand tree base', 5, FUTURE_COUNTS.base),
+      cnt('canopy', 'Resources in the canopy chamber', 10, FUTURE_COUNTS.canopy),
+    ],
+  },
+  {
+    id: 'f03', num: 3, name: 'Cave Waterfall',
+    notes: ['Species cycled through the waterfall advance the counter — the mission result is the number shown on the counter at the end of the match. The counter may not be advanced any other way.'],
+    fields: [cnt('cycled', 'Keystone species cycled through the cave waterfall', 5, FUTURE_COUNTS.waterfall)],
+  },
+  {
+    id: 'f04', num: 4, name: 'Rainforest Awakening',
+    fields: [
+      chk('species', 'All keystone species are released from the nest', 30),
+      chk('resources', 'All resources are released from the hollow tree', 20),
+    ],
+  },
+  {
+    id: 'f05', num: 5, name: 'Central Haven',
+    notes: ['Cooperative: any keystone species or resources resting completely in the central haven at the end of the match score, whichever team delivered them. Both teams get the full shared score.'],
+    fields: [cnt('haven', 'Keystone species or resources resting completely in the central haven', 5, FUTURE_COUNTS.haven)],
+  },
+  {
+    id: 'f06', num: 6, name: 'Level Up: Invasive Attack',
+    notes: [
+      'Optional. Invasive species are placed during pre-match setup; the invasive queen is required but does not score at setup.',
+      'Delivering the invasive queen to the containment zone also scores 10.',
+    ],
+    fields: [
+      cnt('added', 'Invasive species added at setup', 20, FUTURE_COUNTS.invasiveAdded),
+      cnt('contained', 'Invasive species in the containment zone', 10, FUTURE_COUNTS.containment),
+    ],
+  },
+];
+
+export const FUTURE_MISSIONS = FUTURE_RAW.map((m) => ({
+  ...m,
+  noEquipment: false,
+  notes: m.notes || [],
+  image: `assets/missions/${m.id}.jpg`,
+  placeholder: 'assets/missions/m01.svg',
+}));

@@ -2,9 +2,9 @@
 // BIOGLOW scoresheet (+ Challenge Update 01). Every raw input combination of every mission
 // is checked, including invalid ones (bonus ticked without its base condition, etc).
 import assert from 'node:assert/strict';
-import { MISSIONS } from '../js/missions.js';
+import { MISSIONS, FUTURE_MISSIONS } from '../js/missions.js';
 import {
-  scoreAll, scoreMission, normalizeMission, normalizeState, defaultState, missionDomain, maxScores, standings,
+  scoreAll, scoreMission, normalizeMission, normalizeState, defaultState, missionDomain, maxScores, standings, editionOf, missionsOf,
 } from '../js/scoring.js';
 
 let passed = 0;
@@ -208,6 +208,88 @@ test('unscored teams are listed last with no rank; unknown team ids are ignored'
   assert.equal(r.length, 5);
   assert.equal(r[0].team.id, 't3');
   assert.ok(r.slice(1).every((x) => x.rank === null && x.best === null));
+});
+
+
+// ───────────── Future Edition (BIOGLOW Future scoresheet, rulebook rules 20-21) ─────────────
+// Independent oracle, written straight from the printed scoresheet.
+const clampN = (v, hi) => Math.max(0, Math.min(hi, Math.trunc(+v || 0)));
+function futureOracle(r) {
+  const m = r.m;
+  const young = clampN(m.f01.young, 3), grand = clampN(m.f01.grand, 3), hollow = clampN(m.f01.hollow, 3);
+  let f01 = 20 * (young + grand + hollow);
+  if (m.f01.queen === true && young >= 3) f01 += 40; // bonus: 3+ in the young forest AND the queen knocked down
+  const f02 = 5 * clampN(m.f02.base, 15) + 10 * clampN(m.f02.canopy, 15);
+  const f03 = 5 * clampN(m.f03.cycled, 50);
+  const f04 = (m.f04.species === true ? 30 : 0) + (m.f04.resources === true ? 20 : 0);
+  const f05 = 5 * clampN(m.f05.haven, 20);
+  const f06 = 20 * clampN(m.f06.added, 5) + 10 * clampN(m.f06.contained, 6);
+  const sum = f01 + f02 + f03 + f04 + f05 + f06;
+  const p = clampN(r.penalties, 3);
+  return p >= 3 ? 0 : Math.max(0, sum - [0, 10, 30][p]);
+}
+test('future: missions match the printed scoresheet (names, point values, caps)', () => {
+  assert.deepEqual(FUTURE_MISSIONS.map((m) => m.name), ['Mighty Microbiomes', 'Roots of Renewal', 'Cave Waterfall', 'Rainforest Awakening', 'Central Haven', 'Level Up: Invasive Attack']);
+  const f = (id, k) => FUTURE_MISSIONS.find((m) => m.id === id).fields.find((x) => x.key === k);
+  assert.equal(f('f01', 'young').each, 20); assert.equal(f('f01', 'young').max, 3); assert.equal(f('f01', 'queen').pts, 40);
+  assert.equal(f('f02', 'base').each, 5); assert.equal(f('f02', 'canopy').each, 10); assert.equal(f('f02', 'canopy').max, 15);
+  assert.equal(f('f03', 'cycled').each, 5); assert.equal(f('f03', 'cycled').max, 50);
+  assert.equal(f('f04', 'species').pts, 30); assert.equal(f('f04', 'resources').pts, 20);
+  assert.equal(f('f05', 'haven').each, 5);
+  assert.equal(f('f06', 'added').each, 20); assert.equal(f('f06', 'added').max, 5); assert.equal(f('f06', 'contained').each, 10);
+});
+test('future: an empty form scores 0 and has no equipment inspection or precision tokens', () => {
+  const r = scoreAll(defaultState('future'), 'future');
+  assert.equal(r.total, 0); assert.equal(r.equipment, 0); assert.equal(r.tokens, 0); assert.equal(r.edition, 'future');
+  assert.ok(!('equip' in r.state) && !('tokens' in r.state));
+});
+test('future: every mission state agrees with the oracle (all counts, all bonus/invalid combinations)', () => {
+  let n = 0;
+  for (const m of FUTURE_MISSIONS) for (const raw of missionDomain(m)) {
+    const st = defaultState('future'); st.m[m.id] = { ...st.m[m.id], ...raw };
+    assert.equal(scoreAll(st, 'future').total, futureOracle(st), `${m.id} ${JSON.stringify(raw)}`); n++;
+  }
+  console.log(`        (${n} future mission states checked)`);
+});
+test('future: the invasive-queen bonus needs three keystone species in the young forest', () => {
+  const st = defaultState('future'); st.m.f01.queen = true; st.m.f01.young = 2;
+  assert.equal(scoreAll(st, 'future').total, 40, 'bonus ignored: only the 2 species score');
+  st.m.f01.young = 3; assert.equal(scoreAll(st, 'future').total, 60 + 40);
+});
+test('future: penalties — 1st −10, 2nd −30 in total, 3rd zeroes the match, never below 0', () => {
+  const st = defaultState('future'); st.m.f03.cycled = 20; // 100 pts
+  const t = (p) => { st.penalties = p; return scoreAll(st, 'future'); };
+  assert.equal(t(0).total, 100); assert.equal(t(1).total, 90); assert.equal(t(2).total, 70); assert.equal(t(3).total, 0); assert.equal(t(3).zeroed, true);
+  st.m.f03.cycled = 1; assert.equal(t(2).total, 0, 'a small score cannot go negative');
+});
+test('future: random full matches agree with the oracle and the Future maximum is the sum of the mission maxima', () => {
+  let seed = 7; const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  for (let i = 0; i < 4000; i++) {
+    const st = defaultState('future');
+    for (const m of FUTURE_MISSIONS) for (const f of m.fields) st.m[m.id][f.key] = f.type === 'check' ? rnd() < 0.5 : Math.floor(rnd() * (f.max + 1));
+    st.penalties = Math.floor(rnd() * 4);
+    assert.equal(scoreAll(st, 'future').total, futureOracle(st));
+  }
+  const mx = maxScores('future');
+  assert.equal(mx.total, Object.values(mx.perMission).reduce((a, b) => a + b, 0));
+  assert.equal(mx.perMission.f01, 220); assert.equal(mx.perMission.f03, 250); assert.equal(mx.perMission.f04, 50);
+  assert.equal(maxScores().total, maxScores('founders').total, 'Founders max unchanged');
+});
+test('editions: anything that is not "future" scores as Founders; the two engines do not mix', () => {
+  assert.equal(editionOf(undefined), 'founders'); assert.equal(editionOf({ edition: 'future' }), 'future'); assert.equal(editionOf('future'), 'future'); assert.equal(editionOf('x'), 'founders');
+  assert.equal(missionsOf('future'), FUTURE_MISSIONS); assert.equal(missionsOf(), MISSIONS);
+  const st = normalizeState({ equip: true, tokens: 0, penalties: 1, m: { f03: { cycled: 4 } } }, 'future');
+  assert.deepEqual(Object.keys(st).sort(), ['gp', 'm', 'penalties']); assert.equal(st.m.f03.cycled, 4);
+});
+test('future standings rank by the AVERAGE of the matches (Founders by best); equal averages share a rank', () => {
+  const ts = [{ id: 'a', number: 1 }, { id: 'b', number: 2 }, { id: 'c', number: 3 }, { id: 'd', number: 4 }];
+  const sc2 = (id, round, total) => ({ teamId: id, round, total });
+  const scs = [sc2('a', 1, 300), sc2('a', 2, 0), sc2('a', 3, 0), sc2('b', 1, 150), sc2('b', 2, 140), sc2('b', 3, 130), sc2('c', 1, 200), sc2('c', 2, 80), sc2('d', 1, 140), sc2('d', 2, 140), sc2('d', 3, 140)];
+  const fut = standings(ts, scs, 'future');
+  // averages: a=100, b=140, c=140, d=140  → b, c, d tie for 1st (and a is 4th)
+  assert.deepEqual(fut.map((r) => r.rank), [1, 1, 1, 4]); assert.ok(fut.slice(0, 3).every((r) => r.tied)); assert.equal(fut[3].team.id, 'a');
+  assert.equal(fut[3].value, 100); assert.equal(fut[0].metric, 'avg');
+  const fnd = standings(ts, scs, 'founders'); assert.equal(fnd[0].team.id, 'a'); assert.equal(fnd[0].value, 300);
 });
 
 console.log(`\n${passed} scoring tests passed`);

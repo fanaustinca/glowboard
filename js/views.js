@@ -1,9 +1,9 @@
 // Page views. Each view: (root, ctx) => { update?(), destroy?() }.
 // ctx: { store, teams(), scores(), config(), user(), go(hash) }
-import { standings, maxScores } from './scoring.js';
-import { MISSIONS, MATCHES_PER_TEAM, SEASON } from './missions.js';
+import { standings, maxScores, editionOf } from './scoring.js';
+import { MISSIONS, FUTURE_MISSIONS, MATCHES_PER_TEAM, SEASON, EDITIONS, EVENT_EDITION_CHOICES } from './missions.js';
 import { mountScorer } from './scorer.js';
-import { ROLE_LABEL, canScore, eventTeams, normEmail, EMAIL_RE, DEMO_ACCOUNTS, hostedEvents, isCoachOn, coachTeamIds, rosterId } from './store.js';
+import { ROLE_LABEL, canScore, eventTeams, eventEditions, eventBoards, teamEdition, normEmail, EMAIL_RE, DEMO_ACCOUNTS, hostedEvents, isCoachOn, coachTeamIds, rosterId } from './store.js';
 import { generateSchedule, groupSchedule, scheduleTable, clampConfig, SCHEDULE_DEFAULTS, LIMITS } from './schedule.js';
 import { computeStats, filterRuns } from './stats.js';
 import { createTeam, addTeamPerson, genCode } from './teams.js';
@@ -12,7 +12,13 @@ import { analyticsView } from './analytics.js';
 import { openBigScreen } from './bigscreen.js';
 import { esc, toast, timeAgo, modal, csvCell, download } from './ui.js';
 
-const max = () => maxScores();
+const max = (ed) => maxScores(ed);
+const editionsOf = (v) => (EVENT_EDITION_CHOICES.find((c) => c.v === v) || EVENT_EDITION_CHOICES[0]).editions;
+const editionOptions = (eds, sel) => eds.map((x) => `<option value="${x}" ${x === sel ? 'selected' : ''}>${EDITIONS[x].long}</option>`).join('');
+// The non-mission lines of a saved result: equipment + tokens (Founders) or interference penalties (Future).
+const resultRows = (r) => (r?.edition === 'future'
+  ? (r.penalties ? `<tr><td>Interference penalties (${r.penalties}${r.penalties >= 3 ? '+' : ''})</td><td class="num">${r.zeroed ? 'match = 0' : r.penaltyPoints}</td></tr>` : '')
+  : `<tr><td>Equipment inspection</td><td class="num">${r?.equipment ?? 0}</td></tr><tr><td>Precision tokens</td><td class="num">${r?.tokens ?? 0}</td></tr>`);
 // up to 3 team colors as little dots
 export const teamDots = (t) => ((t?.colors || []).length ? `<span class="cdots" aria-hidden="true">${t.colors.map((c) => `<i style="background:${esc(c)}"></i>`).join('')}</span>` : '');
 const EV_KEY = 'gb-event';
@@ -34,15 +40,18 @@ export function dashboardView(root, ctx) {
     </section>
     <div class="toolbar"><label class="field evsel"><span class="sr">Event</span><select id="d-ev" aria-label="Event"></select></label><label class="search"><span class="sr">Find a team</span><input id="d-q" type="search" placeholder="Find a team or number…" autocomplete="off"></label><button type="button" class="btn" id="d-big">⛶ Big screen</button></div>
     <div class="cols">
-      <section class="card"><h2>Team standings</h2><p class="muted small">Ranked by best official match.</p>
-        <ol class="standings" id="d-rows"></ol><p class="empty" id="d-empty" hidden>No teams yet.</p></section>
+      <section class="card"><h2>Team standings</h2><p class="muted small" id="d-rankhint">Ranked by best official match.</p>
+        <div id="d-rows"></div><p class="empty" id="d-empty" hidden>No teams yet.</p></section>
       <aside class="card"><h2>Latest scores</h2><ul class="feed" id="d-feed"></ul><p class="empty" id="d-feedempty" hidden>Scores will appear here as judges submit them.</p></aside>
     </div>`;
   const $ = (s) => root.querySelector(s);
   let q = '', big = null;
+  const rankNote = (boards) => (boards.length > 1 ? `Founders: best of ${MATCHES_PER_TEAM} official matches · Future: average of ${MATCHES_PER_TEAM}`
+    : boards[0]?.future ? `average of ${MATCHES_PER_TEAM} official matches` : `best of ${MATCHES_PER_TEAM} official matches`);
   const bigData = () => {
     const ev = pickEvent(ctx.events());
-    return { title: ev?.name || 'FIRST LEGO League', sub: `${SEASON.name} ${SEASON.years} · best of ${MATCHES_PER_TEAM} official matches`, rows: standings(eventTeams(ev, ctx.teams()), ctx.scores().filter((x) => x.eventId === ev?.id)) };
+    const boards = eventBoards(ev, ctx.teams(), ctx.scores());
+    return { title: ev?.name || 'FIRST LEGO League', sub: `${SEASON.name} ${SEASON.years} · ${rankNote(boards)}`, boards };
   };
   $('#d-big').addEventListener('click', () => { big?.close(); big = openBigScreen(bigData, () => { big = null; }); });
   $('#d-q').addEventListener('input', (e) => { q = e.target.value.trim().toLowerCase(); render(); });
@@ -55,28 +64,34 @@ export function dashboardView(root, ctx) {
     evSel.innerHTML = events.slice().sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0))
       .map((e) => `<option value="${esc(e.id)}">${esc(e.name)}${e.live ? ' · live' : ''}</option>`).join('');
     if (ev) evSel.value = ev.id;
-    const teams = eventTeams(ev, ctx.teams()), scores = ctx.scores().filter((x) => x.eventId === ev?.id);
+    const boards = eventBoards(ev, ctx.teams(), ctx.scores());
+    const teams = boards.flatMap((b) => b.rows.map((r) => r.team)), scores = ctx.scores().filter((x) => x.eventId === ev?.id && teams.some((t) => t.id === x.teamId));
     $('#d-event').textContent = ev?.name || 'FIRST LEGO League';
-    $('#d-sub').textContent = `${SEASON.name} ${SEASON.years}${ev?.date ? ` · ${ev.date}` : ''} · best of ${MATCHES_PER_TEAM} official matches`;
-    const rows = standings(teams, scores);
-    const top = rows[0]?.best;
+    $('#d-sub').textContent = `${SEASON.name} ${SEASON.years}${ev?.date ? ` · ${ev.date}` : ''} · ${rankNote(boards)}`;
+    $('#d-rankhint').textContent = boards.length > 1 ? 'Founders ranked by best match, Future by the average of matches.' : boards[0]?.future ? 'Ranked by the average of official matches.' : 'Ranked by best official match.';
+    const top = Math.max(0, ...boards.flatMap((b) => b.rows.map((r) => r.best ?? 0)));
     $('#d-stats').innerHTML = [
-      ['Teams', teams.length], ['Scores in', scores.length], ['High score', top ?? '—'], ['Max possible', max().total],
+      ['Teams', teams.length], ['Scores in', scores.length], ['High score', scores.length ? top : '—'], ['Max possible', Math.max(...boards.map((b) => max(b.ed).total))],
     ].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
-    const shown = rows.filter((r) => !q || `${r.team.number} ${r.team.name}`.toLowerCase().includes(q));
-    $('#d-rows').innerHTML = shown.map((r) => {
-      const chips = Array.from({ length: MATCHES_PER_TEAM }, (_, i) => {
-        const s = r.rounds[i + 1];
-        return `<span class="rd ${s && s.total === r.best ? 'best' : ''}" title="Match ${i + 1}"><i>M${i + 1}</i>${s ? s.total : '—'}</span>`;
-      }).join('');
-      const medal = r.rank && r.rank <= 3 ? ` medal-${r.rank}` : '';
-      return `<li class="row${medal}" tabindex="0" role="button" data-team="${esc(r.team.id)}" aria-label="${esc(r.team.name)}, rank ${r.rank ?? 'none'}, best score ${r.best ?? 'none'}. Open details.">
+    let shownN = 0;
+    $('#d-rows').innerHTML = boards.map((b) => {
+      const shown = b.rows.filter((r) => !q || `${r.team.number} ${r.team.name}`.toLowerCase().includes(q));
+      shownN += shown.length;
+      const list = shown.map((r) => {
+        const chips = Array.from({ length: MATCHES_PER_TEAM }, (_, i) => {
+          const s = r.rounds[i + 1];
+          return `<span class="rd ${!b.future && s && s.total === r.best ? 'best' : ''}" title="Match ${i + 1}"><i>M${i + 1}</i>${s ? s.total : '—'}</span>`;
+        }).join('');
+        const medal = r.rank && r.rank <= 3 ? ` medal-${r.rank}` : '';
+        return `<li class="row${medal}" tabindex="0" role="button" data-team="${esc(r.team.id)}" aria-label="${esc(r.team.name)}, rank ${r.rank ?? 'none'}, ${b.future ? 'average' : 'best'} score ${r.value ?? 'none'}. Open details.">
         <span class="rk">${r.rank ?? '–'}</span>
         <span class="who"><b>${teamDots(r.team)}${esc(r.team.name)}</b><small>Team #${esc(r.team.number)}${r.tied ? ' · <span class="tie" title="Equal scores — decided by local officials">tied</span>' : ''}</small></span>
         <span class="rounds">${chips}</span>
-        <span class="bestv"><b>${r.best ?? '—'}</b><small>best</small></span></li>`;
+        <span class="bestv"><b>${r.value ?? '—'}</b><small>${b.future ? 'avg' : 'best'}</small></span></li>`;
+      }).join('');
+      return `${boards.length > 1 ? `<h3 class="edhead">${esc(b.label)} <small>${b.future ? 'ranked by average' : 'ranked by best match'}</small></h3>` : ''}<ol class="standings" data-ed="${b.ed}">${list}</ol>`;
     }).join('');
-    $('#d-empty').hidden = shown.length > 0;
+    $('#d-empty').hidden = shownN > 0;
     $('#d-empty').textContent = teams.length ? 'No team matches your search.' : 'No teams yet.';
     const feed = scores.slice().sort((a, b) => b.createdAt - a.createdAt).slice(0, 8);
     $('#d-feed').innerHTML = feed.map((s) => `<li><span class="fs">${s.total}</span><span><b>${esc(s.name)}</b><small>Match ${s.round}${s.table ? ` · table ${esc(s.table)}` : ''} · ${timeAgo(s.createdAt)}</small></span></li>`).join('');
@@ -87,12 +102,11 @@ export function dashboardView(root, ctx) {
   function open(id) {
     const t = ctx.teams().find((x) => x.id === id); if (!t) return;
     const ev = pickEvent(ctx.events());
-    const rs = ctx.scores().filter((s) => s.teamId === id && s.eventId === ev?.id).sort((a, b) => a.round - b.round);
+    const rs = ctx.scores().filter((s) => s.teamId === id && s.eventId === ev?.id && editionOf(s) === teamEdition(t)).sort((a, b) => a.round - b.round);
     const body = rs.length ? rs.map((s) => `
       <details class="round" ${rs.length === 1 ? 'open' : ''}><summary><b>Match ${s.round}</b><span>${s.total} pts</span></summary>
         <table class="rv-table"><tbody>
-          <tr><td>Equipment inspection</td><td class="num">${s.result.equipment}</td></tr>
-          <tr><td>Precision tokens</td><td class="num">${s.result.tokens}</td></tr>
+          ${resultRows(s.result)}
           ${s.result.missions.map((m) => `<tr class="${m.points ? 'has' : ''}"><td>M${String(m.num).padStart(2, '0')} ${esc(m.name)}</td><td class="num">${m.points}</td></tr>`).join('')}
         </tbody><tfoot><tr><th>Total</th><th class="num">${s.total}</th></tr></tfoot></table>
         <p class="muted small">Gracious Professionalism: ${s.gp} (Core Values) · scored ${timeAgo(s.createdAt)}</p></details>`).join('')
@@ -262,7 +276,7 @@ export function statsView(root, ctx, { onEdit = () => {} } = {}) {
   const u = ctx.user();
   if (!u?.teamId) return { destroy() {} };
   root.innerHTML = '<div id="st"></div>';
-  let runs = [], range = 'all';
+  let allRuns = [], range = 'all', edSel = null;
   const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
   const r0 = (n) => Math.round(n);
   const mname = (m) => `M${String(m.num).padStart(2, '0')} ${m.name}`;
@@ -280,8 +294,12 @@ export function statsView(root, ctx, { onEdit = () => {} } = {}) {
 
   function render() {
     const el = root.querySelector('#st');
+    const present = [...new Set(allRuns.map(editionOf))];
+    const teamEd = teamEdition(ctx.teams().find((t) => t.id === u.teamId));
+    const ed = edSel && present.includes(edSel) ? edSel : present.includes(teamEd) || !present.length ? teamEd : present[0];
+    const runs = allRuns.filter((r) => editionOf(r) === ed);
     const set = filterRuns(runs, range);
-    const st = computeStats(set);
+    const st = computeStats(set, ed);
     const o = st.overall;
     const official = ctx.scores().filter((x) => x.teamId === u.teamId).sort((a, b) => a.round - b.round);
     if (!runs.length) { el.innerHTML = '<section class="card"><p class="empty">No practice runs saved yet — tap <b>➕ Practice run</b> above to score one. Everyone on your team shares these stats.</p></section>'; return; }
@@ -289,6 +307,7 @@ export function statsView(root, ctx, { onEdit = () => {} } = {}) {
     el.innerHTML = `
       <div class="toolbar"><label class="field evsel"><span>Runs to analyse</span><select id="st-range">
         ${[['all', 'All runs'], ['5', 'Last 5'], ['10', 'Last 10'], ['20', 'Last 20']].map(([v, l]) => `<option value="${v}" ${range === v ? 'selected' : ''}>${l}${v !== 'all' && runs.length < +v ? '' : ''}</option>`).join('')}</select></label>
+        ${present.length > 1 ? `<label class="field evsel"><span>Edition</span><select id="st-ed">${editionOptions(present, ed)}</select></label>` : ''}
         <p class="muted small grow">Analysing <b>${o.n}</b> of ${runs.length} saved run${runs.length === 1 ? '' : 's'}, from the whole team.</p></div>
       <section class="kpis">
         <div class="kpi"><span>Practice runs</span><b>${o.n}</b></div>
@@ -301,7 +320,7 @@ export function statsView(root, ctx, { onEdit = () => {} } = {}) {
       <div class="cols">
         <section class="card"><h2>Score trend</h2>${spark(filterRuns(runs, range).map((r) => r.total))}
           ${official.length ? `<h3>Official matches</h3><ul class="chips">${official.map((x) => `<li>Match ${x.round}: <b>${x.total}</b></li>`).join('')}</ul>` : ''}
-          <p class="muted small">Equipment inspection done in <b>${r0(st.equip.rate)}%</b> of runs · precision tokens left on average: <b>${f1(st.tokens.avgRemaining)}</b> of ${st.tokens.max} (${f1(st.tokens.avgPoints)} pts).</p></section>
+          ${ed === 'future' ? '' : `<p class="muted small">Equipment inspection done in <b>${r0(st.equip.rate)}%</b> of runs · precision tokens left on average: <b>${f1(st.tokens.avgRemaining)}</b> of ${st.tokens.max} (${f1(st.tokens.avgPoints)} pts).</p>`}</section>
         <section class="card"><h2>Biggest points left on the table</h2>${st.pointsLeft.length ? `<ul class="focus">${st.pointsLeft.map((m) => `<li><b>${esc(mname(m))}</b><small>${f1(m.left)} pts per run on average</small></li>`).join('')}</ul>` : ''}</section>
       </div>
       <div class="cols">
@@ -321,18 +340,18 @@ export function statsView(root, ctx, { onEdit = () => {} } = {}) {
         <li><button class="linkish" data-run="${esc(r.id)}"><b>${r.total}</b> pts <small>${new Date(r.createdAt).toLocaleString()}${r.by ? ` · ${esc(r.by)}` : ''}${r.note ? ` · “${esc(r.note)}”` : ''}</small></button>
         <button class="btn ghost small" data-edit="${esc(r.id)}" aria-label="Edit run from ${new Date(r.createdAt).toLocaleString()}">Edit</button><button class="btn ghost small" data-del="${esc(r.id)}" aria-label="Delete run from ${new Date(r.createdAt).toLocaleString()}">Delete</button></li>`).join('')}</ul></section>`;
   }
-  root.addEventListener('change', (e) => { if (e.target.id === 'st-range') { range = e.target.value; render(); } });
+  root.addEventListener('change', (e) => { if (e.target.id === 'st-range') { range = e.target.value; render(); } if (e.target.id === 'st-ed') { edSel = e.target.value; render(); } });
   root.addEventListener('click', async (e) => {
     const ed = e.target.closest('[data-edit]'); if (ed) return onEdit(ed.dataset.edit);
     const d = e.target.closest('[data-del]'), v = e.target.closest('[data-run]');
     if (d && confirm('Delete this practice run?')) { try { await ctx.store.remove('practice', d.dataset.del); } catch (x) { toast(x.message, 'err'); } }
     if (v) {
-      const r = runs.find((x) => x.id === v.dataset.run); if (!r) return;
-      modal(`<table class="rv-table"><tbody><tr><td>Equipment inspection</td><td class="num">${r.result.equipment}</td></tr><tr><td>Precision tokens</td><td class="num">${r.result.tokens}</td></tr>
+      const r = allRuns.find((x) => x.id === v.dataset.run); if (!r) return;
+      modal(`<table class="rv-table"><tbody>${resultRows(r.result)}
         ${r.result.missions.map((m) => `<tr class="${m.points ? 'has' : ''}"><td>M${String(m.num).padStart(2, '0')} ${esc(m.name)}</td><td class="num">${m.points}</td></tr>`).join('')}</tbody><tfoot><tr><th>Total</th><th class="num">${r.total}</th></tr></tfoot></table>${r.note ? `<p class="muted small">Note: ${esc(r.note)}</p>` : ''}`, { title: 'Practice run' });
     }
   });
-  const unsub = ctx.store.subscribe('practice', (r) => { runs = r.filter((x) => x.teamId === u.teamId); render(); });
+  const unsub = ctx.store.subscribe('practice', (r) => { allRuns = r.filter((x) => x.teamId === u.teamId); render(); });
   return { update: render, destroy: unsub };
 }
 
@@ -538,16 +557,17 @@ export function adminView(root, ctx) {
   root.innerHTML = `<h1 class="page-title">Admin console</h1>
     <section class="card"><h2>Events</h2>
       <form id="a-ev" class="inline"><label class="field grow"><span>Event name</span><input id="a-evn" maxlength="80" required></label>
-        <label class="field"><span>Date</span><input id="a-evd" type="date"></label><button class="btn primary">Add event</button></form>
+        <label class="field"><span>Editions</span><select id="a-eved">${EVENT_EDITION_CHOICES.map((c) => `<option value="${c.v}">${c.label}</option>`).join('')}</select></label><label class="field"><span>Date</span><input id="a-evd" type="date"></label><button class="btn primary">Add event</button></form>
       <p class="muted small">The <b>live</b> event is what visitors see first. Standings are kept separately for each event.</p>
       <ul class="admin-list" id="a-events"></ul></section>
     <section class="card"><h2>Teams</h2>
       <form id="a-team" class="grid-user" novalidate><label class="field"><span>Number <small>(required)</small></span><input id="a-tn" inputmode="numeric" pattern="[0-9]*" maxlength="6" required></label>
         <label class="field"><span>Team name <small>(required)</small></span><input id="a-tname" maxlength="60" required></label>
+        <label class="field"><span>Edition</span><select id="a-ted">${editionOptions(['founders', 'future'], 'founders')}</select></label>
         <label class="field"><span>Designated coach’s Google email</span><input id="a-tcoach" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label><button class="btn primary">Add team</button></form>
       <p class="muted small">Each new team gets a team password.</p>
       <div id="a-terr" class="error" role="alert" hidden></div>
-      <details class="bulk"><summary>Bulk add (paste “number, name, coach@gmail.com” per line — coach optional)</summary><textarea id="a-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers, coach@gmail.com&#10;5530, Byte Me"></textarea><button class="btn ghost" id="a-bulkgo" type="button">Add all</button></details>
+      <details class="bulk"><summary>Bulk add (paste “number, name, coach@gmail.com” per line — coach optional; uses the edition chosen above)</summary><textarea id="a-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers, coach@gmail.com&#10;5530, Byte Me"></textarea><button class="btn ghost" id="a-bulkgo" type="button">Add all</button></details>
       <ul class="admin-list" id="a-teams"></ul></section>
     <section class="card"><h2>People &amp; access</h2>
       <p class="muted small">Add coaches, judges, hosts and admins by Google email. Hosts are set per event.</p>
@@ -567,9 +587,9 @@ export function adminView(root, ctx) {
   function render() {
     const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
     const events = ctx.events().slice().sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0));
-    $('#a-events').innerHTML = events.map((e) => `<li><span><b>${esc(e.name)}</b>${e.live ? ' <span class="badge live-b">live</span>' : ''}<small class="block">${e.date ? esc(e.date) + ' · ' : ''}${e.teamIds?.length ? `${e.teamIds.length} teams` : 'all teams'} · ${hostCount(e.id)} host${hostCount(e.id) === 1 ? '' : 's'}${e.schedule?.rows?.length ? ' · schedule ✓' : ''}</small></span>
+    $('#a-events').innerHTML = events.map((e) => `<li><span><b>${esc(e.name)}</b>${e.live ? ' <span class="badge live-b">live</span>' : ''}<small class="block">${e.date ? esc(e.date) + ' · ' : ''}${eventEditions(e).map((x) => EDITIONS[x].label).join(' + ')} · ${e.teamIds?.length ? `${e.teamIds.length} teams` : 'all teams'} · ${hostCount(e.id)} host${hostCount(e.id) === 1 ? '' : 's'}${e.schedule?.rows?.length ? ' · schedule ✓' : ''}</small></span>
       <span class="acts"><button class="btn ghost small" data-evmanage="${esc(e.id)}">Manage</button><button class="btn ghost small" data-evhosts="${esc(e.id)}">Hosts</button>${e.live ? '' : `<button class="btn ghost small" data-evlive="${esc(e.id)}">Make live</button>`}<button class="btn ghost small danger" data-delev="${esc(e.id)}" aria-label="Delete event ${esc(e.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No events yet — add one so judges can score.</li>';
-    $('#a-teams').innerHTML = teams.map((t) => `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)}<small class="block">${esc(roster.filter((p) => p.role === 'coach' && p.teamId === t.id).map((p) => p.email).join(', ') || 'no coach yet')}</small></span><span class="acts"><button class="btn ghost small" data-teampw="${esc(t.id)}" aria-label="Team password for ${esc(t.name)}">Password</button><button class="btn ghost small" data-rename="${esc(t.id)}" aria-label="Rename team ${esc(t.name)}">Rename</button><button class="btn ghost small danger" data-delteam="${esc(t.id)}" aria-label="Delete team ${esc(t.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No teams yet.</li>';
+    $('#a-teams').innerHTML = teams.map((t) => `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span><small class="block">${esc(roster.filter((p) => p.role === 'coach' && p.teamId === t.id).map((p) => p.email).join(', ') || 'no coach yet')}</small></span><span class="acts"><button class="btn ghost small" data-teamed="${esc(t.id)}" aria-label="Switch edition of ${esc(t.name)}">${teamEdition(t) === 'future' ? 'Make Founders' : 'Make Future'}</button><button class="btn ghost small" data-teampw="${esc(t.id)}" aria-label="Team password for ${esc(t.name)}">Password</button><button class="btn ghost small" data-rename="${esc(t.id)}" aria-label="Rename team ${esc(t.name)}">Rename</button><button class="btn ghost small danger" data-delteam="${esc(t.id)}" aria-label="Delete team ${esc(t.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No teams yet.</li>';
     const sel = $('#a-ut'); const cur = sel.value;
     sel.innerHTML = teams.map((t) => `<option value="${esc(t.id)}">${esc(t.number)} ${esc(t.name)}</option>`).join(''); sel.value = cur;
     $('#a-ut-wrap').hidden = !['coach', 'member'].includes($('#a-ur').value);
@@ -634,7 +654,7 @@ export function adminView(root, ctx) {
     const name = $('#a-evn').value.trim(); if (!name) return;
     run(async () => {
       const first = ctx.events().length === 0;
-      await ctx.store.put('events', ctx.store.newId('e'), { name, date: $('#a-evd').value || '', live: first, createdAt: Date.now() });
+      await ctx.store.put('events', ctx.store.newId('e'), { name, date: $('#a-evd').value || '', live: first, editions: editionsOf($('#a-eved').value), createdAt: Date.now() });
       e.target.reset(); toast(`Event “${name}” added`, 'ok');
     });
   });
@@ -648,7 +668,7 @@ export function adminView(root, ctx) {
     if (!name) return bad('A team name is required.');
     if (!EMAIL_RE.test(coachEmail)) return bad('Enter the designated coach’s Google email address.');
     if (ctx.teams().some((t) => t.number === number)) return bad(`Team #${number} already exists.`);
-    run(async () => { const res = await createTeam(ctx.store, u, { number, name, coachEmail }); e.target.reset(); $('#a-tn').focus(); showTeamCreated(res, true); });
+    const edition = $('#a-ted').value; run(async () => { const res = await createTeam(ctx.store, u, { number, name, coachEmail, edition }); e.target.reset(); $('#a-tn').focus(); showTeamCreated(res, true); });
   });
   $('#a-bulkgo').addEventListener('click', () => run(async () => {
     const lines = $('#a-bulk').value.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -656,7 +676,7 @@ export function adminView(root, ctx) {
     for (const l of lines) {
       const m = l.match(/^(\d{1,6})\s*[,\t]\s*([^,\t]+?)\s*(?:[,\t]\s*(\S+@\S+))?$/); if (!m || !+m[1]) continue;
       if (ctx.teams().some((t) => t.number === +m[1]) || made.some((r) => r.number === +m[1])) continue;
-      made.push(await createTeam(ctx.store, u, { number: +m[1], name: m[2].trim(), coachEmail: m[3] || '' }));
+      made.push(await createTeam(ctx.store, u, { number: +m[1], name: m[2].trim(), coachEmail: m[3] || '', edition: $('#a-ted').value }));
     }
     $('#a-bulk').value = '';
     if (made.length) { const dlg = modal(`<p>${made.length} team${made.length === 1 ? '' : 's'} added. Team passwords:</p><div class="table-scroll"><table class="data"><thead><tr><th>Team</th><th>Password</th><th>Coach</th></tr></thead><tbody>${made.map((r) => `<tr><td>#${esc(r.number)} ${esc(r.name)}</td><td><code>${esc(r.password)}</code></td><td>${esc(r.coach === 'added' ? r.coachEmail : r.coach === 'none' ? '—' : `${r.coachEmail} (not changed)`)}</td></tr>`).join('')}</tbody></table></div>`, { title: 'Teams created' }); void dlg; } else toast('No new teams to add', 'err');
@@ -686,6 +706,7 @@ export function adminView(root, ctx) {
     const t = e.target.closest('button'); if (!t) return;
     const d = t.dataset;
     if (d.teampw) openTeamPassword(ctx, d.teampw);
+    if (d.teamed) { const cur = ctx.teams().find((x) => x.id === d.teamed); run(() => ctx.store.patch('teams', d.teamed, { edition: teamEdition(cur) === 'future' ? 'founders' : 'future' })); }
     if (d.delteam && confirm('Delete this team? Its official scores stay in the database but no longer show.')) run(() => ctx.store.remove('teams', d.delteam));
     if (d.rename) { const cur = ctx.teams().find((x) => x.id === d.rename); const name = prompt('New team name', cur?.name || ''); if (name?.trim()) run(() => ctx.store.patch('teams', d.rename, { name: name.trim() })); }
     if (d.delscore && confirm('Delete this official score? The match can then be re-scored.')) run(() => ctx.store.remove('scores', d.delscore));
@@ -702,10 +723,11 @@ export function adminView(root, ctx) {
     });
   });
   $('#a-csv').addEventListener('click', () => {
-    const head = ['event', 'team_number', 'team_name', 'match', 'total', 'gp', 'table', 'judge', 'initials', 'submitted_at', ...MISSIONS.map((m) => m.id)];
+    const cols = [...MISSIONS, ...FUTURE_MISSIONS];
+    const head = ['event', 'edition', 'team_number', 'team_name', 'match', 'total', 'gp', 'table', 'judge', 'initials', 'submitted_at', ...cols.map((m) => m.id)];
     const rows = ctx.scores().slice().sort((a, b) => (a.eventId || '').localeCompare(b.eventId || '') || a.number - b.number || a.round - b.round).map((s) => [
-      evName(s.eventId), s.number, s.name, s.round, s.total, s.gp, s.table, s.judgeName, s.initials, new Date(s.createdAt).toISOString(),
-      ...MISSIONS.map((m) => s.result.missions.find((x) => x.id === m.id)?.points ?? 0)]);
+      evName(s.eventId), editionOf(s), s.number, s.name, s.round, s.total, s.gp, s.table, s.judgeName, s.initials, new Date(s.createdAt).toISOString(),
+      ...cols.map((m) => s.result.missions.find((x) => x.id === m.id)?.points ?? '')]);
     download('glowboard-scores.csv', [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\n'));
   });
   $('#a-reset')?.addEventListener('click', () => { if (confirm('Replace ALL demo data with fresh sample data?')) run(() => ctx.store.resetDemo()); });
@@ -772,7 +794,7 @@ export function eventView(root, ctx) {
 
   const newEventForm = (u) => (u.role === 'admin' ? `<section class="card"><h2>Add an event</h2>
         <form id="e-newev" class="inline"><label class="field grow"><span>Event name</span><input id="e-nevn" maxlength="80" required></label>
-          <label class="field"><span>Date</span><input id="e-nevd" type="date"></label><button class="btn primary">Add event</button></form></section>` : '');
+          <label class="field"><span>Editions</span><select id="e-neved">${EVENT_EDITION_CHOICES.map((c) => `<option value="${c.v}">${c.label}</option>`).join('')}</select></label><label class="field"><span>Date</span><input id="e-nevd" type="date"></label><button class="btn primary">Add event</button></form></section>` : '');
   function draw() {
     const list = mine(), ev = cur();
     if (!ev) { host.innerHTML = newEventForm(u) + `<section class="card narrow"><h2>No events yet</h2><p class="muted">${u.role === 'admin' ? 'Add one above.' : 'An admin needs to assign you to an event. Ask them to add your Google account under Events → Hosts.'}</p></section>`; return; }
@@ -788,6 +810,7 @@ export function eventView(root, ctx) {
       <section class="card"><h2>Teams at this event <small id="e-teamcount">(${evTeams.length}${ev.teamIds?.length ? '' : ' · all teams'})</small></h2>
         <form id="e-team" class="grid-user" novalidate><label class="field"><span>Number <small>(required)</small></span><input id="e-tn" inputmode="numeric" pattern="[0-9]*" maxlength="6" required></label>
           <label class="field"><span>Team name <small>(required)</small></span><input id="e-tname" maxlength="60" required></label>
+          ${eventEditions(ev).length > 1 ? `<label class="field"><span>Edition</span><select id="e-ted">${editionOptions(eventEditions(ev), eventEditions(ev)[0])}</select></label>` : ''}
           <label class="field"><span>Designated coach’s Google email</span><input id="e-tcoach" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label><button class="btn primary">Add team</button></form>
         <p class="muted small">Each new team gets a team password.</p>
         <div id="e-terr" class="error" role="alert" hidden></div>
@@ -816,7 +839,7 @@ export function eventView(root, ctx) {
         <p class="muted small">Delete a score so the match can be scored again.</p>
         <ul class="admin-list" id="e-scores">${scoresHTML(ev)}</ul></section>`;
   }
-  const checksHTML = (teams) => teams.map((t) => `<div class="checkrow"><label class="check"><input type="checkbox" data-tid="${esc(t.id)}" ${picks.has(t.id) ? 'checked' : ''}> <span><b>#${esc(t.number)}</b> ${esc(t.name)}</span></label></div>`).join('') || '<p class="empty">No teams yet — add one above.</p>';
+  const checksHTML = (teams) => teams.map((t) => `<div class="checkrow"><label class="check"><input type="checkbox" data-tid="${esc(t.id)}" ${picks.has(t.id) ? 'checked' : ''}> <span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span></span></label></div>`).join('') || '<p class="empty">No teams yet — add one above.</p>';
   // Refresh just the lists (not the forms), so typing / Enter-to-submit never loses focus or half-typed input.
   function refreshLists() {
     const ev = cur(); if (!ev) return;
@@ -862,7 +885,7 @@ export function eventView(root, ctx) {
       const name = host.querySelector('#e-nevn').value.trim(); if (!name) return;
       run(async () => {
         const id = ctx.store.newId('e');
-        await ctx.store.put('events', id, { name, date: host.querySelector('#e-nevd').value || '', live: ctx.events().length === 0, createdAt: Date.now() });
+        await ctx.store.put('events', id, { name, date: host.querySelector('#e-nevd').value || '', live: ctx.events().length === 0, editions: editionsOf(host.querySelector('#e-neved').value), createdAt: Date.now() });
         selId = id; pickKey = ''; try { localStorage.setItem(MANAGE_KEY, id); } catch { /* ignore */ }
         toast(`Event “${name}” added`, 'ok'); draw();
       });
@@ -877,7 +900,7 @@ export function eventView(root, ctx) {
       if (!EMAIL_RE.test(coachEmail)) return bad('Enter the designated coach’s Google email address.');
       if (ctx.teams().some((t) => t.number === number)) return bad(`Team #${number} already exists — tick it below instead.`);
       run(async () => {
-        const res = await createTeam(ctx.store, u, { number, name, coachEmail });
+        const res = await createTeam(ctx.store, u, { number, name, coachEmail, edition: host.querySelector('#e-ted')?.value || eventEditions(ev)[0] });
         picks.add(res.id);
         if (ev.teamIds?.length) await ctx.store.patch('events', ev.id, { teamIds: [...new Set([...ev.teamIds, res.id])] });
         e.target.reset(); host.querySelector('#e-tn').focus(); showTeamCreated(res, false);
@@ -927,7 +950,7 @@ export function eventView(root, ctx) {
       for (const l of lines) {
         const m = l.match(/^(\d{1,6})\s*[,\t]\s*([^,\t]+?)\s*(?:[,\t]\s*(\S+@\S+))?$/); if (!m || !+m[1]) continue;
         if (ctx.teams().some((t) => t.number === +m[1]) || made.some((r) => r.number === +m[1])) continue;
-        made.push(await createTeam(ctx.store, u, { number: +m[1], name: m[2].trim(), coachEmail: m[3] || '' }));
+        made.push(await createTeam(ctx.store, u, { number: +m[1], name: m[2].trim(), coachEmail: m[3] || '', edition: host.querySelector('#e-ted')?.value || eventEditions(ev)[0] }));
       }
       made.forEach((r) => picks.add(r.id));
       if (ev.teamIds?.length && made.length) await ctx.store.patch('events', ev.id, { teamIds: [...new Set([...ev.teamIds, ...made.map((r) => r.id)])] });
