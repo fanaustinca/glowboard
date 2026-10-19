@@ -309,3 +309,19 @@ button.opt { cursor: pointer; } button.opt:hover:not(:disabled) { background: va
 .teamdetail { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); } .tabpanel { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); } .tabpanel[hidden] { display: none; }
 .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; } .tabs button { min-height: 44px; padding: 0 14px; border-radius: 99px; border: 1px solid var(--line, rgba(127,127,127,.3)); background: var(--surface2); color: inherit; font: inherit; cursor: pointer; } .tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
 .teamdetail { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); } .tabpanel { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); } .tabpanel[hidden], .teamdetail[hidden] { display: none; }
+
+/* ---- big screen (projector) scoreboard: fixed dark theme, every team always fits ---- */
+body.bs-open { overflow: hidden; }
+.bs { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: #0b1410; color: #f2f8f3; padding: 1.2vh 2vw 1.5vh; }
+.bs-head { display: flex; justify-content: space-between; align-items: center; gap: 2vw; flex: 0 0 auto; padding-bottom: .8vh; }
+.bs-head h1 { margin: 0; font-size: clamp(1.1rem, 4vh, 2.6rem); } .bs-head p { margin: 0; color: #9fb7a6; font-size: clamp(.75rem, 2vh, 1.2rem); }
+.bs-x { font: inherit; font-size: clamp(.8rem, 2vh, 1.1rem); color: #f2f8f3; background: transparent; border: 1px solid #3b5444; border-radius: 10px; padding: .4em .9em; cursor: pointer; opacity: .6; }
+.bs-x:hover, .bs-x:focus-visible { opacity: 1; }
+.bs-table { flex: 1 1 0; min-height: 0; display: grid; font-variant-numeric: tabular-nums; overflow: hidden; }
+.bs-r { display: grid; grid-template-columns: .8fr 1.4fr 4fr 1.2fr 1.2fr 1.2fr 1.4fr; align-items: center; gap: 0 .5em; min-height: 0; padding: 0 .5em; border-bottom: 1px solid #1f3328; line-height: 1; }
+.bs-r > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bs-r .bs-n { text-align: right; } .bs-r .bs-rk { font-weight: 800; text-align: center; } .bs-r .bs-tn { color: #9fb7a6; text-align: center; } .bs-r .bs-nm { font-weight: 700; }
+.bs-r .bs-best { font-weight: 800; color: #6ee27f; } .bs-r .bs-top { font-weight: 700; color: #fff; } .bs-r .bs-n:not(.bs-top):not(.bs-best) { color: #b9cdbf; }
+.bs-h { font-size: .7em; color: #9fb7a6; text-transform: uppercase; letter-spacing: .06em; border-bottom: 2px solid #3b5444; } .bs-h > span { font-weight: 600; }
+.bs-r.m1 { background: #2b2508; } .bs-r.m1 .bs-rk { color: #ffd23f; } .bs-r.m2 { background: #1d2328; } .bs-r.m2 .bs-rk { color: #c4cfd8; } .bs-r.m3 { background: #2a1d12; } .bs-r.m3 .bs-rk { color: #e39a5c; }
+.bs-empty { color: #9fb7a6; align-self: center; text-align: center; }

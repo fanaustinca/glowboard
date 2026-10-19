@@ -1,5 +1,5 @@
 import { createStore } from './store.js';
-import { dashboardView, loginView, judgeView, teamView, adminView, scheduleView, eventView, promptDefaultPasswords } from './views.js';
+import { dashboardView, toolView, loginView, judgeView, teamView, adminView, scheduleView, eventView, promptDefaultPasswords } from './views.js';
 import { hasRole, scoringEvents, canScore, ROLE_LABEL } from './store.js';
 import { esc, toast } from './ui.js';
 import { SEASON } from './missions.js';
@@ -9,6 +9,7 @@ import { SEASON } from './missions.js';
 const ROUTES = {
   '': { view: dashboardView, label: 'Standings', short: 'Scores', icon: '🏆', roles: null, nav: true },
   schedule: { view: scheduleView, label: 'Schedule', icon: '🗓️', roles: null, nav: true },
+  tool: { view: toolView, label: 'Scoring tool', short: 'Tool', icon: '🧮', roles: null, nav: true },
   judge: { view: judgeView, label: 'Judge', icon: '📝', roles: ['scorer'], nav: true },
   // practice / stats / analytics used to be separate pages: they now live inside the Teams page
   practice: { view: teamView, label: 'Teams', roles: ['signedin'], nav: false },

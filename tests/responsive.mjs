@@ -156,6 +156,23 @@ await check('guests are gated away from judge/practice/stats/admin', async () =>
     assert.equal(await page.$('#sc-submit'), null, `${r}: no scorer shown`);
   }
 });
+await check('big screen shows every team ranked by best score and fits the screen; the scoring tool saves nothing', async () => {
+  await goHash(page, '');
+  await tap(page, '#d-big'); await page.waitForSelector('.bs .bs-r:not(.bs-h)');
+  const rows = await page.$$eval('.bs .bs-r:not(.bs-h)', (r) => r.map((x) => ({ rk: x.querySelector('.bs-rk').textContent, n: x.querySelector('.bs-tn').textContent, best: x.querySelector('.bs-best').textContent })));
+  const teams = await page.evaluate(async () => { const { createStore } = await import('./js/store.js'); const s = await createStore(); return new Promise((res) => { const un = s.subscribe('teams', (r) => { res(r.length); un?.(); }); }); });
+  assert.equal(rows.length, teams, 'every team is listed');
+  const bests = rows.filter((r) => r.best !== '–').map((r) => +r.best); assert.deepEqual(bests, [...bests].sort((a, b) => b - a), 'ranked by top score');
+  assert.equal(await page.$$eval('.bs .bs-h .bs-n', (e) => e.length), 4, 'three match columns + best');
+  const fit = await page.evaluate(() => { const t = document.querySelector('.bs-table').getBoundingClientRect(); const l = [...document.querySelectorAll('.bs-r')].pop().getBoundingClientRect(); return l.bottom <= t.bottom + 1 && document.documentElement.scrollWidth <= innerWidth; });
+  assert.ok(fit, 'the whole table fits in the viewport');
+  await page.keyboard.press('Escape'); await new Promise((r) => setTimeout(r, 150)); assert.equal(await page.$('.bs'), null, 'Esc closes the big screen');
+  await goHash(page, 'tool');
+  assert.equal(await page.$('#sc-submit'), null, 'no save button'); assert.equal(await page.$('#sc-note'), null, 'no note field');
+  await tap(page, '#sc-equip'); assert.equal(+(await text(page, '#sc-total')), 70, 'equipment inspection adds 20 to the full-token 50');
+  assert.equal(await page.evaluate(() => Object.keys(localStorage).filter((k) => /draft-tool/.test(k)).length), 0, 'no draft is stored');
+  await goHash(page, ''); await goHash(page, 'tool'); assert.equal(+(await text(page, '#sc-total')), 50, 'cleared on return');
+});
 await check('login is Google-only; an unlisted Google account is refused', async () => {
   await goHash(page, 'login');
   assert.equal(await page.$('#lg-u'), null, 'no username field'); assert.equal(await page.$('#lg-p'), null, 'no password field');
@@ -166,7 +183,7 @@ await login(page, 'judge@demo.test');
 
 await check('judge nav shows Judge but not Host/Practice/My stats', async () => {
   const links = await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent));
-  assert.deepEqual(links, ['Standings', 'Schedule', 'Judge', 'Teams']);
+  assert.deepEqual(links, ['Standings', 'Schedule', 'Scoring tool', 'Judge', 'Teams']);
 });
 
 const expect = defaultState();
@@ -289,7 +306,7 @@ await check('judges cannot delete scores or touch teams/accounts', async () => {
 await page.evaluate(() => document.getElementById('signout').click());
 await login(page, 'coach@demo.test');
 await check('coach nav shows Practice, Team stats and My team only', async () => {
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Teams']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Teams']);
 });
 await check('team can save a practice run (no signature needed) and sees it in stats', async () => {
   await goHash(page, 'practice');
@@ -427,7 +444,7 @@ await check('admin assigns an event host; host manages teams and builds + saves 
   assert.match(await text(page, '#a-users'), /coach@demo\.test[\s\S]*|Coach Casey/); assert.ok((await page.$$('#a-users .live-b')).length >= 1, 'host badge on people list');
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'host@demo.test');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Teams', 'Event']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Judge', 'Teams', 'Event']);
   await goHash(page, 'event');
   assert.match(await text(page, '#ev'), /Season Opener/);
   assert.equal(await page.$('#e-sel'), null, 'host of one event sees only that event');
@@ -492,7 +509,7 @@ await check('team password sign-in (demo): members join with number + password, 
   await join('4201', 'wrong1'); assert.match(await text(page, '#lg-err'), /don’t match/);
   await join('4201', '424242', 'Sam');
   assert.equal(await page.evaluate(() => location.hash), '#/team');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Teams']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Teams']);
   await tap(page, '#td-practice'); await page.waitForSelector('#sc-equip'); await tap(page, '#sc-equip'); await tap(page, '#sc-submit'); await page.waitForSelector('.toast.ok');
   await goHash(page, 'stats'); assert.match(await text(page, '#st'), /Sam/, 'their name is on the run in the shared team history');
   await goHash(page, 'team'); assert.equal(await page.$('#t-add'), null);
@@ -519,8 +536,8 @@ await check('team password sign-in (demo): members join with number + password, 
 await check('coach who is also a host: coach pages + host pages, phone bar = 4 tabs + More, nothing leaks to other events', async () => {
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'cohost@demo.test');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Judge', 'Teams', 'Event']);
-  assert.equal(await page.$$eval('#nav > a', (a) => a.length), 5); assert.equal(await page.$('#nav-more'), null);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Judge', 'Teams', 'Event']);
+  assert.equal(await page.$$eval('#nav > a', (a) => a.length), 4); assert.ok(await page.$('#nav-more'));
   assert.match(await text(page, '#who'), /host/i);
   const box = await page.$eval('#nav', (e) => { const r = e.getBoundingClientRect(); return { bottom: r.bottom, h: innerHeight, items: [...e.children].filter((c) => c.tagName !== 'DIV').map((c) => c.getBoundingClientRect().width) }; });
   assert.ok(Math.abs(box.bottom - box.h) < 2, 'tab bar is pinned to the bottom of the screen'); assert.ok(box.items.every((w) => w >= 60), 'each tab is at least 60px wide: ' + box.items);

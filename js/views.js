@@ -9,6 +9,7 @@ import { computeStats, filterRuns } from './stats.js';
 import { createTeam, addTeamPerson, genCode } from './teams.js';
 import { downloadCSV, copyForSheets } from './sheets.js';
 import { analyticsView } from './analytics.js';
+import { openBigScreen } from './bigscreen.js';
 import { esc, toast, timeAgo, modal, csvCell, download } from './ui.js';
 
 const max = () => maxScores();
@@ -31,14 +32,19 @@ export function dashboardView(root, ctx) {
         <h1 id="d-event">Event</h1><p class="muted" id="d-sub"></p></div>
       <dl class="stats" id="d-stats"></dl>
     </section>
-    <div class="toolbar"><label class="field evsel"><span class="sr">Event</span><select id="d-ev" aria-label="Event"></select></label><label class="search"><span class="sr">Find a team</span><input id="d-q" type="search" placeholder="Find a team or number…" autocomplete="off"></label></div>
+    <div class="toolbar"><label class="field evsel"><span class="sr">Event</span><select id="d-ev" aria-label="Event"></select></label><label class="search"><span class="sr">Find a team</span><input id="d-q" type="search" placeholder="Find a team or number…" autocomplete="off"></label><button type="button" class="btn" id="d-big">⛶ Big screen</button></div>
     <div class="cols">
       <section class="card"><h2>Team standings</h2><p class="muted small">Ranked by best official match.</p>
         <ol class="standings" id="d-rows"></ol><p class="empty" id="d-empty" hidden>No teams yet.</p></section>
       <aside class="card"><h2>Latest scores</h2><ul class="feed" id="d-feed"></ul><p class="empty" id="d-feedempty" hidden>Scores will appear here as judges submit them.</p></aside>
     </div>`;
   const $ = (s) => root.querySelector(s);
-  let q = '';
+  let q = '', big = null;
+  const bigData = () => {
+    const ev = pickEvent(ctx.events());
+    return { title: ev?.name || 'FIRST LEGO League', sub: `${SEASON.name} ${SEASON.years} · best of ${MATCHES_PER_TEAM} official matches`, rows: standings(eventTeams(ev, ctx.teams()), ctx.scores().filter((x) => x.eventId === ev?.id)) };
+  };
+  $('#d-big').addEventListener('click', () => { big?.close(); big = openBigScreen(bigData, () => { big = null; }); });
   $('#d-q').addEventListener('input', (e) => { q = e.target.value.trim().toLowerCase(); render(); });
   $('#d-ev').addEventListener('change', (e) => { try { localStorage.setItem(EV_KEY, e.target.value); } catch { /* ignore */ } render(); });
 
@@ -75,6 +81,7 @@ export function dashboardView(root, ctx) {
     const feed = scores.slice().sort((a, b) => b.createdAt - a.createdAt).slice(0, 8);
     $('#d-feed').innerHTML = feed.map((s) => `<li><span class="fs">${s.total}</span><span><b>${esc(s.name)}</b><small>Match ${s.round}${s.table ? ` · table ${esc(s.table)}` : ''} · ${timeAgo(s.createdAt)}</small></span></li>`).join('');
     $('#d-feedempty').hidden = feed.length > 0;
+    big?.render();
   }
 
   function open(id) {
@@ -96,7 +103,14 @@ export function dashboardView(root, ctx) {
   root.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-team]')) { e.preventDefault(); open(e.target.dataset.team); } });
   const tick = setInterval(render, 30000);
   render();
-  return { update: render, destroy: () => clearInterval(tick) };
+  return { update: render, destroy: () => { clearInterval(tick); big?.close(); } };
+}
+
+// ───────────────────────────── Scoring tool (calculator — saves nothing) ─────────────────────────────
+export function toolView(root, ctx) {
+  root.innerHTML = '<h1 class="page-title">Scoring tool</h1><div id="sc"></div>';
+  const sc = mountScorer(root.querySelector('#sc'), { mode: 'tool', store: ctx.store, teams: ctx.teams, scores: ctx.scores, events: ctx.events, user: ctx.user });
+  return { destroy: () => sc.destroy() };
 }
 
 // ───────────────────────────── Login ─────────────────────────────

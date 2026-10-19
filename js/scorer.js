@@ -40,6 +40,7 @@ function missionHTML(m) {
 
 export function mountScorer(root, { mode, store, teams, scores, events = () => [], user, lockedTeamId = null, editRun = null, onDone = () => {} }) {
   const official = mode === 'official';
+  const tool = mode === 'tool'; // calculator only: nothing is saved anywhere
   const max = maxScores();
   const DRAFT = `gb-draft-${mode}`;
   let state = defaultState();
@@ -50,7 +51,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   let busy = false;
 
   if (editRun) state = normalizeState(editRun.state);
-  else try {
+  else if (!tool) try {
     const d = JSON.parse(localStorage.getItem(DRAFT) || 'null');
     if (d) { state = normalizeState(d.state); if (!lockedTeamId) teamId = d.teamId || ''; eventId = d.eventId || ''; round = d.round || 1; table = d.table || ''; }
   } catch { /* ignore corrupt draft */ }
@@ -63,17 +64,17 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     .map((t) => `<option value="${esc(t.id)}">${t.number} — ${esc(t.name)}</option>`).join('');
 
   root.innerHTML = `
-  <div class="scorer ${official ? 'official' : 'practice'}">
+  <div class="scorer ${official ? 'official' : tool ? 'practice tool' : 'practice'}">
     <section class="card setup">
-      <h2>${official ? 'Match details' : 'Practice run'}</h2>
+      <h2>${official ? 'Match details' : tool ? 'Scoring tool' : 'Practice run'}</h2>
       <div class="grid-setup">
         ${official ? `
         <label class="field"><span>Event</span><select id="sc-event" required>${eventOptions()}</select></label>
         <label class="field"><span>Team</span><select id="sc-team" required><option value="">Select a team…</option>${teamOptions()}</select></label>
         <label class="field"><span>Match</span><select id="sc-round">${Array.from({ length: MATCHES_PER_TEAM }, (_, i) => `<option value="${i + 1}">Official match ${i + 1}</option>`).join('')}</select></label>
         <label class="field"><span>Table</span><input id="sc-table" inputmode="text" maxlength="12" placeholder="e.g. 3" autocomplete="off"></label>` : `
-        <p class="muted">Score a practice run with the official rules.</p>
-        <label class="field"><span>Note <small>(optional — what were you testing?)</small></span><input id="sc-note" maxlength="80" autocomplete="off" placeholder="e.g. new attachment for M05" value="${esc(editRun?.note || '')}"></label>`}
+        ${tool ? '<p class="muted">Add up a score with the official rules. Nothing is saved — it clears when you leave or refresh.</p>' : `<p class="muted">Score a practice run with the official rules.</p>
+        <label class="field"><span>Note <small>(optional — what were you testing?)</small></span><input id="sc-note" maxlength="80" autocomplete="off" placeholder="e.g. new attachment for M05" value="${esc(editRun?.note || '')}"></label>`}`}
       </div>
       <div id="sc-status" class="status" hidden></div>
     </section>
@@ -125,8 +126,8 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
 
     <div class="actions">
       <div id="sc-error" class="error" role="alert" hidden></div>
-      <button type="button" class="btn primary big" id="sc-submit">${official ? 'Submit official score' : editRun ? 'Save changes' : 'Save practice run'}</button>
-      ${editRun ? '<button type="button" class="btn ghost" id="sc-cancel">Cancel</button>' : '<button type="button" class="btn ghost" id="sc-reset">Reset form</button>'}
+      ${tool ? '' : `<button type="button" class="btn primary big" id="sc-submit">${official ? 'Submit official score' : editRun ? 'Save changes' : 'Save practice run'}</button>`}
+      ${editRun ? '<button type="button" class="btn ghost" id="sc-cancel">Cancel</button>' : `<button type="button" class="btn ${tool ? 'primary big' : 'ghost'}" id="sc-reset">${tool ? 'Start over' : 'Reset form'}</button>`}
     </div>
   </div>`;
 
@@ -137,7 +138,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   // ---------- state helpers ----------
   const fieldDef = (mid, k) => MISSIONS.find((m) => m.id === mid).fields.find((f) => f.key === k);
   function mutate(fn) { fn(state); sync(); saveDraft(); }
-  function saveDraft() { if (editRun) return; try { localStorage.setItem(DRAFT, JSON.stringify({ state, teamId, eventId, round, table })); } catch { /* ignore */ } }
+  function saveDraft() { if (editRun || tool) return; try { localStorage.setItem(DRAFT, JSON.stringify({ state, teamId, eventId, round, table })); } catch { /* ignore */ } }
 
   // ---------- render sync ----------
   function sync() {
@@ -270,7 +271,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   $('#sc-cancel')?.addEventListener('click', () => onDone());
   $('#sc-reset')?.addEventListener('click', () => { if (confirm('Clear everything entered so far?')) reset(true); });
 
-  $('#sc-submit').addEventListener('click', async () => {
+  $('#sc-submit')?.addEventListener('click', async () => {
     if (busy) return;
     showError('');
     const res = scoreAll(state);
