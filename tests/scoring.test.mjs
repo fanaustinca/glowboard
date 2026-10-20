@@ -216,14 +216,17 @@ test('unscored teams are listed last with no rank; unknown team ids are ignored'
 const clampN = (v, hi) => Math.max(0, Math.min(hi, Math.trunc(+v || 0)));
 function futureOracle(r) {
   const m = r.m;
-  const young = clampN(m.f01.young, 3), grand = clampN(m.f01.grand, 3), hollow = clampN(m.f01.hollow, 3);
-  let f01 = 20 * (young + grand + hollow);
-  if (m.f01.queen === true && young >= 3) f01 += 40; // bonus: 3+ in the young forest AND the queen knocked down
+  // 4 keystone species per team: young forest (4th triggers the queen, scores nothing) > grand tree > hollow tree
+  const young = clampN(m.f01.young, 4), grand = Math.min(clampN(m.f01.grand, 3), 4 - young), hollow = Math.min(clampN(m.f01.hollow, 3), 4 - young - grand);
+  let f01 = 20 * (Math.min(young, 3) + grand + hollow);
+  if (m.f01.queen === true && young >= 4) f01 += 40; // bonus: the 4th species in the young forest knocks the queen down
   const baseN = clampN(m.f02.base, 15); // only 15 resources exist: base + canopy <= 15
-  const f02 = 5 * baseN + 10 * Math.min(clampN(m.f02.canopy, 15), 15 - baseN);
+  const canopyN = Math.min(clampN(m.f02.canopy, 15), 15 - baseN);
+  const f02 = 5 * baseN + 10 * canopyN;
   const f03 = 5 * clampN(m.f03.cycled, 50);
   const f04 = (m.f04.species === true ? 30 : 0) + (m.f04.resources === true ? 20 : 0);
-  const f05 = 5 * clampN(m.f05.haven, 20);
+  const havenMax = Math.max(0, 38 - young - grand - hollow - baseN - canopyN); // 38 tokens exist in all
+  const f05 = 5 * Math.min(clampN(m.f05.haven, 38), havenMax);
   const f06 = 20 * clampN(m.f06.added, 5) + 10 * clampN(m.f06.contained, 6);
   const sum = f01 + f02 + f03 + f04 + f05 + f06;
   const p = clampN(r.penalties, 3);
@@ -232,11 +235,11 @@ function futureOracle(r) {
 test('future: missions match the printed scoresheet (names, point values, caps)', () => {
   assert.deepEqual(FUTURE_MISSIONS.map((m) => m.name), ['Mighty Microbiomes', 'Roots of Renewal', 'Cave Waterfall', 'Rainforest Awakening', 'Central Haven', 'Level Up: Invasive Attack']);
   const f = (id, k) => FUTURE_MISSIONS.find((m) => m.id === id).fields.find((x) => x.key === k);
-  assert.equal(f('f01', 'young').each, 20); assert.equal(f('f01', 'young').max, 3); assert.equal(f('f01', 'queen').pts, 40);
+  assert.equal(f('f01', 'young').each, 20); assert.equal(f('f01', 'young').max, 4); assert.equal(f('f01', 'grand').max, 3); assert.equal(f('f01', 'queen').pts, 40);
   assert.equal(f('f02', 'base').each, 5); assert.equal(f('f02', 'canopy').each, 10); assert.equal(f('f02', 'canopy').max, 15);
   assert.equal(f('f03', 'cycled').each, 5); assert.equal(f('f03', 'cycled').max, 50);
   assert.equal(f('f04', 'species').pts, 30); assert.equal(f('f04', 'resources').pts, 20);
-  assert.equal(f('f05', 'haven').each, 5);
+  assert.equal(f('f05', 'haven').each, 5); assert.equal(f('f05', 'haven').max, 38);
   assert.equal(f('f06', 'added').each, 20); assert.equal(f('f06', 'added').max, 5); assert.equal(f('f06', 'contained').each, 10);
 });
 test('future: an empty form scores 0 and has no equipment inspection or precision tokens', () => {
@@ -252,10 +255,12 @@ test('future: every mission state agrees with the oracle (all counts, all bonus/
   }
   console.log(`        (${n} future mission states checked)`);
 });
-test('future: the invasive-queen bonus needs three keystone species in the young forest', () => {
+test('future: the invasive-queen bonus needs the 4th keystone species in the young forest', () => {
   const st = defaultState('future'); st.m.f01.queen = true; st.m.f01.young = 2;
   assert.equal(scoreAll(st, 'future').total, 40, 'bonus ignored: only the 2 species score');
-  st.m.f01.young = 3; assert.equal(scoreAll(st, 'future').total, 60 + 40);
+  st.m.f01.young = 3; assert.equal(scoreAll(st, 'future').total, 60, 'three species and no 4th: no queen defeat, no bonus');
+  st.m.f01.young = 4; assert.equal(scoreAll(st, 'future').total, 100, '3 score + the 4th triggers the bonus');
+  st.m.f01.grand = 2; assert.equal(scoreAll(st, 'future').state.m.f01.grand, 0, 'only 4 species exist');
 });
 test('future: penalties — 1st −10, 2nd −30 in total, 3rd zeroes the match, never below 0', () => {
   const st = defaultState('future'); st.m.f03.cycled = 20; // 100 pts
@@ -272,8 +277,9 @@ test('future: random full matches agree with the oracle and the Future maximum i
     assert.equal(scoreAll(st, 'future').total, futureOracle(st));
   }
   const mx = maxScores('future');
-  assert.equal(mx.total, Object.values(mx.perMission).reduce((a, b) => a + b, 0));
-  assert.equal(mx.perMission.f01, 220); assert.equal(mx.perMission.f03, 250); assert.equal(mx.perMission.f04, 50);
+  assert.equal(mx.perMission.f01, 100, 'only 4 keystone species: 3 score + the 4th triggers the 40-point bonus');
+  assert.equal(mx.perMission.f02, 150, '15 resources shared between base and canopy');
+  assert.ok(mx.total < Object.values(mx.perMission).reduce((a, b) => a + b, 0), 'shared pieces: the best match is below the sum of the mission maxima'); assert.equal(mx.perMission.f03, 250); assert.equal(mx.perMission.f04, 50);
   assert.equal(maxScores().total, maxScores('founders').total, 'Founders max unchanged');
 });
 test('editions: anything that is not "future" scores as Founders; the two engines do not mix', () => {

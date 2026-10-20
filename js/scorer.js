@@ -175,7 +175,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   // ---------- render sync ----------
   function sync() {
     // Clear dependents whose base condition was removed (e.g. un-tick drone → bonus clears).
-    for (const m of MS()) state.m[m.id] = normalizeMission(m, state.m[m.id]);
+    for (const m of MS()) state.m[m.id] = normalizeMission(m, state.m[m.id], state.m);
     const res = scoreAll(state, edition);
     const max = maxScores(edition);
 
@@ -202,7 +202,8 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
         el.querySelectorAll('button').forEach((b) => { b.disabled = locked; });
         if (f.type === 'check') el.setAttribute('aria-checked', String(ms[f.key]));
         else if (f.type === 'count') {
-          const cap = f.maxFn ? Math.min(f.max, f.maxFn(ms)) : f.max;
+          let cap = f.maxFn ? Math.min(f.max, f.maxFn(ms)) : f.max;
+          if (f.poolFn) cap = Math.max(0, Math.min(cap, f.poolFn(state.m)));
           el.querySelector('output').textContent = ms[f.key];
           const rg = el.querySelector('[data-act=range]'), nm = el.querySelector('[data-act=num]');
           if (rg) { rg.value = ms[f.key]; rg.max = cap; rg.disabled = locked; }

@@ -620,7 +620,8 @@ await check('Future Edition: scoring tool, penalties, mission images, an event r
   assert.ok(await page.$$eval('img.mimg', (im) => im.every((i) => i.naturalWidth > 0 && /\/f0\d\.jpg$/.test(i.getAttribute('src')))), 'every Future mission shows its picture');
   const inc = (m, k, n) => page.evaluate((m2, k2, n2) => { for (let i = 0; i < n2; i++) document.querySelector(`[data-m="${m2}"][data-k="${k2}"] [data-act="inc"]`).click(); }, m, k, n);
   await inc('f03', 'cycled', 4); assert.equal(await total(), 20);
-  await inc('f01', 'young', 3); await tap(page, sc('f01', 'queen')); assert.equal(await total(), 20 + 60 + 40);
+  await inc('f01', 'young', 3); assert.equal(await page.$eval(sc('f01', 'queen'), (e) => e.disabled || e.classList.contains('locked')), true, 'queen bonus needs the 4th species');
+  await inc('f01', 'young', 1); await tap(page, sc('f01', 'queen')); assert.equal(await total(), 20 + 60 + 40);
   await tap(page, '#sc-pen [data-i="1"]'); assert.equal(await total(), 110);
   await tap(page, '#sc-pen [data-i="2"]'); assert.equal(await total(), 90);
   await tap(page, '#sc-pen [data-i="3"]'); assert.equal(await total(), 0); assert.match(await text(page, '#rv-body'), /third penalty/);
