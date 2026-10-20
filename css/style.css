@@ -341,3 +341,22 @@ body.bs-open { overflow: hidden; }
 .slidr{display:flex;align-items:center;gap:.6rem;flex:1 1 12rem;min-width:0}
 .slidr input[type=range]{flex:1;min-width:6rem}
 .slidr input[type=number]{width:4.2rem;text-align:center}
+
+/* Match timer */
+.timer { text-align: center; }
+.tm-stage { padding: clamp(8px, 3vw, 28px) 0; }
+.tm-clock { font-size: clamp(5rem, 24vw, 14rem); font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.tm-sub { font-size: 1.25rem; color: var(--muted); min-height: 1.6em; }
+.timer[data-zone=soft] .tm-clock { color: #b7791f; }
+.timer[data-zone=warn] .tm-clock { color: #d97706; }
+.timer[data-zone=end] .tm-clock { color: #dc2626; }
+.timer[data-phase=count] .tm-clock { color: var(--accent); }
+.tm-btns, .tm-opts { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; align-items: center; margin: 12px 0; }
+.tm-btns .btn.big { min-width: 9rem; min-height: 56px; font-size: 1.2rem; }
+.tm-vol { display: flex; align-items: center; gap: 8px; }
+.timer:fullscreen { display: flex; flex-direction: column; justify-content: center; background: var(--bg); border-radius: 0; }
+.timer:fullscreen .tm-clock { font-size: min(34vw, 48vh); }
+.tm-pop { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.tm-pop[hidden] { display: none; }
+.tm-pop .card { max-width: 26rem; text-align: center; margin: 0; }
+.tm-pop-ico { font-size: 3rem; }
