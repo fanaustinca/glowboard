@@ -337,3 +337,7 @@ body.bs-open { overflow: hidden; }
 .badge.ed-future { background: #e7f0ff; color: #1c4fa0; } .badge.ed-founders { background: var(--accent-soft); color: var(--accent); }
 [data-theme="dark"] .badge.ed-future { background: #1b2b4a; color: #9bbcf2; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .badge.ed-future { background: #1b2b4a; color: #9bbcf2; } }
+
+.slidr{display:flex;align-items:center;gap:.6rem;flex:1 1 12rem;min-width:0}
+.slidr input[type=range]{flex:1;min-width:6rem}
+.slidr input[type=number]{width:4.2rem;text-align:center}

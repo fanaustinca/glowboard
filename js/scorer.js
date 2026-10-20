@@ -18,6 +18,7 @@ function fieldHTML(m, f) {
   if (f.type === 'count') {
     return `<div class="opt cnt" ${base}>
       <span class="lbl">${esc(f.label)}<em class="note">${f.each} pts each · max <b data-role="max">${f.max}</b></em></span>
+      ${f.slider ? `<span class="slidr"><input type="range" min="0" max="${f.max}" value="0" data-act="range" aria-label="${esc(f.label)}"><input type="number" inputmode="numeric" min="0" max="${f.max}" value="0" data-act="num" aria-label="${esc(f.label)} (type a number)"></span>` : ''}
       <span class="stepper"><button type="button" data-act="dec" aria-label="Fewer: ${esc(f.label)}">−</button><output aria-live="polite">0</output><button type="button" data-act="inc" aria-label="More: ${esc(f.label)}">+</button></span></div>`;
   }
   const opts = f.options.map((o, i) => `<button type="button" role="radio" aria-checked="false" data-i="${i}">${esc(o.label)}${o.pts ? `<small>${sign(o.pts)}</small>` : ''}</button>`).join('');
@@ -203,6 +204,10 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
         else if (f.type === 'count') {
           const cap = f.maxFn ? Math.min(f.max, f.maxFn(ms)) : f.max;
           el.querySelector('output').textContent = ms[f.key];
+          const rg = el.querySelector('[data-act=range]'), nm = el.querySelector('[data-act=num]');
+          if (rg) { rg.value = ms[f.key]; rg.max = cap; rg.disabled = locked; }
+          if (nm && document.activeElement !== nm) nm.value = ms[f.key];
+          if (nm) { nm.max = cap; nm.disabled = locked; }
           el.querySelector('[data-role=max]').textContent = cap;
           el.querySelector('[data-act=dec]').disabled = locked || ms[f.key] <= 0;
           el.querySelector('[data-act=inc]').disabled = locked || ms[f.key] >= cap;
@@ -278,6 +283,13 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   }
 
   // ---------- events ----------
+  root.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!t.matches || !t.matches('input[data-act=range], input[data-act=num]')) return;
+    const host = t.closest('[data-m][data-k]');
+    const v = Math.max(0, Math.floor(+t.value) || 0);
+    mutate((s) => { s.m[host.dataset.m][host.dataset.k] = v; });
+  });
   root.addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b || b.disabled) return;

@@ -197,7 +197,7 @@ export const EVENT_EDITION_CHOICES = [
 
 // The rulebook gives no limit for these piles (only the “max” printed on the scoresheet), so the counters stop at a
 // size that no real match can reach.
-export const FUTURE_COUNTS = { microbiome: 3, canopy: 15, waterfall: 50, base: 15, haven: 20, invasiveAdded: 5, containment: 6 };
+export const FUTURE_COUNTS = { microbiome: 3, canopy: 15, waterfall: 50, base: 15, resourcesTotal: 15, haven: 20, invasiveAdded: 5, containment: 6 };
 // Interference penalties: 1st = −10, 2nd = −30 in total, 3rd = the match score is zero.
 export const FUTURE_PENALTIES = [
   { v: 0, label: '0', pts: 0 }, { v: 1, label: '1', pts: -10 }, { v: 2, label: '2', pts: -30 }, { v: 3, label: '3+', pts: null },
@@ -221,16 +221,16 @@ const FUTURE_RAW = [
   },
   {
     id: 'f02', num: 2, name: 'Roots of Renewal',
-    notes: ['Resources must be cycled up the tree. Placing resources directly into the canopy chamber will not count.'],
+    notes: ['There are only 15 resources in total, shared between the base and the canopy chamber. Resources must be cycled up the tree. Placing resources directly into the canopy chamber will not count.'],
     fields: [
-      cnt('base', 'Resources in the grand tree base', 5, FUTURE_COUNTS.base),
-      cnt('canopy', 'Resources in the canopy chamber', 10, FUTURE_COUNTS.canopy),
+      cnt('base', 'Resources in the grand tree base', 5, FUTURE_COUNTS.resourcesTotal, { maxFn: (s) => FUTURE_COUNTS.resourcesTotal - s.canopy }),
+      cnt('canopy', 'Resources in the canopy chamber', 10, FUTURE_COUNTS.resourcesTotal, { maxFn: (s) => FUTURE_COUNTS.resourcesTotal - s.base }),
     ],
   },
   {
     id: 'f03', num: 3, name: 'Cave Waterfall',
     notes: ['Species cycled through the waterfall advance the counter — the mission result is the number shown on the counter at the end of the match. The counter may not be advanced any other way.'],
-    fields: [cnt('cycled', 'Keystone species cycled through the cave waterfall', 5, FUTURE_COUNTS.waterfall)],
+    fields: [cnt('cycled', 'Keystone species cycled through the cave waterfall', 5, FUTURE_COUNTS.waterfall, { slider: true })],
   },
   {
     id: 'f04', num: 4, name: 'Rainforest Awakening',

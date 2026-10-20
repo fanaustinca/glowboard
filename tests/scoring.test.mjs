@@ -219,7 +219,8 @@ function futureOracle(r) {
   const young = clampN(m.f01.young, 3), grand = clampN(m.f01.grand, 3), hollow = clampN(m.f01.hollow, 3);
   let f01 = 20 * (young + grand + hollow);
   if (m.f01.queen === true && young >= 3) f01 += 40; // bonus: 3+ in the young forest AND the queen knocked down
-  const f02 = 5 * clampN(m.f02.base, 15) + 10 * clampN(m.f02.canopy, 15);
+  const baseN = clampN(m.f02.base, 15); // only 15 resources exist: base + canopy <= 15
+  const f02 = 5 * baseN + 10 * Math.min(clampN(m.f02.canopy, 15), 15 - baseN);
   const f03 = 5 * clampN(m.f03.cycled, 50);
   const f04 = (m.f04.species === true ? 30 : 0) + (m.f04.resources === true ? 20 : 0);
   const f05 = 5 * clampN(m.f05.haven, 20);
