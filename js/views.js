@@ -14,6 +14,7 @@ import { esc, toast, timeAgo, modal, csvCell, download } from './ui.js';
 
 const max = (ed) => maxScores(ed);
 const editionsOf = (v) => (EVENT_EDITION_CHOICES.find((c) => c.v === v) || EVENT_EDITION_CHOICES[0]).editions;
+const editionChoice = (ev) => { const k = eventEditions(ev).join(); return (EVENT_EDITION_CHOICES.find((c) => c.editions.join() === k) || EVENT_EDITION_CHOICES[0]).v; };
 const editionOptions = (eds, sel) => eds.map((x) => `<option value="${x}" ${x === sel ? 'selected' : ''}>${EDITIONS[x].long}</option>`).join('');
 // The non-mission lines of a saved result: equipment + tokens (Founders) or interference penalties (Future).
 const resultRows = (r) => (r?.edition === 'future'
@@ -588,7 +589,7 @@ export function adminView(root, ctx) {
     const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
     const events = ctx.events().slice().sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0));
     $('#a-events').innerHTML = events.map((e) => `<li><span><b>${esc(e.name)}</b>${e.live ? ' <span class="badge live-b">live</span>' : ''}<small class="block">${e.date ? esc(e.date) + ' · ' : ''}${eventEditions(e).map((x) => EDITIONS[x].label).join(' + ')} · ${e.teamIds?.length ? `${e.teamIds.length} teams` : 'all teams'} · ${hostCount(e.id)} host${hostCount(e.id) === 1 ? '' : 's'}${e.schedule?.rows?.length ? ' · schedule ✓' : ''}</small></span>
-      <span class="acts"><button class="btn ghost small" data-evmanage="${esc(e.id)}">Manage</button><button class="btn ghost small" data-evhosts="${esc(e.id)}">Hosts</button>${e.live ? '' : `<button class="btn ghost small" data-evlive="${esc(e.id)}">Make live</button>`}<button class="btn ghost small danger" data-delev="${esc(e.id)}" aria-label="Delete event ${esc(e.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No events yet — add one so judges can score.</li>';
+      <span class="acts"><select class="evedsel" data-evedsel="${esc(e.id)}" aria-label="Editions for ${esc(e.name)}">${EVENT_EDITION_CHOICES.map((c) => `<option value="${c.v}"${editionChoice(e) === c.v ? ' selected' : ''}>${c.label}</option>`).join('')}</select><button class="btn ghost small" data-evmanage="${esc(e.id)}">Manage</button><button class="btn ghost small" data-evhosts="${esc(e.id)}">Hosts</button>${e.live ? '' : `<button class="btn ghost small" data-evlive="${esc(e.id)}">Make live</button>`}<button class="btn ghost small danger" data-delev="${esc(e.id)}" aria-label="Delete event ${esc(e.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No events yet — add one so judges can score.</li>';
     $('#a-teams').innerHTML = teams.map((t) => `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span><small class="block">${esc(roster.filter((p) => p.role === 'coach' && p.teamId === t.id).map((p) => p.email).join(', ') || 'no coach yet')}</small></span><span class="acts"><button class="btn ghost small" data-teamed="${esc(t.id)}" aria-label="Switch edition of ${esc(t.name)}">${teamEdition(t) === 'future' ? 'Make Founders' : 'Make Future'}</button><button class="btn ghost small" data-teampw="${esc(t.id)}" aria-label="Team password for ${esc(t.name)}">Password</button><button class="btn ghost small" data-rename="${esc(t.id)}" aria-label="Rename team ${esc(t.name)}">Rename</button><button class="btn ghost small danger" data-delteam="${esc(t.id)}" aria-label="Delete team ${esc(t.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No teams yet.</li>';
     const sel = $('#a-ut'); const cur = sel.value;
     sel.innerHTML = teams.map((t) => `<option value="${esc(t.id)}">${esc(t.number)} ${esc(t.name)}</option>`).join(''); sel.value = cur;
@@ -701,6 +702,15 @@ export function adminView(root, ctx) {
       }
       e.target.reset(); toast(`${email} added as ${teamPart ? `${role} of ${teamName($('#a-ut').value || '')}`.replace(/ of $/, '') : ROLE_LABEL[role].toLowerCase()}`, 'ok');
     } catch (x) { er.hidden = false; er.textContent = x.message; }
+  });
+  root.addEventListener('change', (e) => {
+    const sel = e.target.closest('select[data-evedsel]'); if (!sel) return;
+    const ev = ctx.events().find((x) => x.id === sel.dataset.evedsel); if (!ev) return;
+    const next = editionsOf(sel.value);
+    const dropped = eventEditions(ev).filter((x) => !next.includes(x));
+    const hasScores = dropped.length && ctx.scores().some((sc) => sc.eventId === ev.id && dropped.includes(editionOf(sc)));
+    if (hasScores && !confirm(`This event already has ${dropped.map((x) => EDITIONS[x].label).join(' / ')} scores. They stay saved but won’t show on the leaderboard while that edition is off. Change anyway?`)) { sel.value = editionChoice(ev); return; }
+    run(async () => { await ctx.store.patch('events', ev.id, { editions: next }); toast('Event editions updated', 'ok'); });
   });
   root.addEventListener('click', (e) => {
     const t = e.target.closest('button'); if (!t) return;

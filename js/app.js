@@ -1,5 +1,6 @@
 import { createStore } from './store.js';
 import { timerView } from './timer.js';
+import { helpView } from './help.js';
 import { dashboardView, toolView, loginView, judgeView, teamView, adminView, scheduleView, eventView, promptDefaultPasswords } from './views.js';
 import { hasRole, scoringEvents, canScore, ROLE_LABEL } from './store.js';
 import { esc, toast } from './ui.js';
@@ -20,6 +21,7 @@ const ROUTES = {
   team: { view: teamView, label: 'Teams', icon: '👥', roles: ['signedin'], nav: true },
   event: { view: eventView, label: 'Event', icon: '🎪', roles: ['host', 'admin'], nav: true },
   admin: { view: adminView, label: 'Admin', icon: '⚙️', roles: ['admin'], nav: true },
+  help: { view: helpView, label: 'Help', icon: '❓', roles: null, nav: true },
   login: { view: loginView, label: 'Sign in', roles: null, nav: false },
 };
 const scorer = (u) => canScore(u, scoringEvents(u, data.events, data.eventHosts, data.eventJudges));

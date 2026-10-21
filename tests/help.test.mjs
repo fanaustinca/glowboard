@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+const { helpSections } = await import('../js/help.js');
+const txt = (u, sc = []) => helpSections(u, sc).join(' ');
+assert.ok(!/Signing in/.test(txt({ role: 'coach', teams: [{ teamId: 't1', role: 'coach' }] })));
+assert.match(txt(null), /Signing in/); assert.ok(!/Admin|Running an event|Scoring matches/.test(txt(null)));
+const host = txt({ role: 'coach', host: true, teams: [{ teamId: 't1', role: 'coach' }] }, [{ id: 'e' }]);
+assert.match(host, /Running an event/); assert.match(host, /cannot see the current one/); assert.ok(!/>Admin</.test(host), 'a host sees no admin help');
+assert.match(host, /Coaching a team/);
+const member = txt({ role: 'member', teams: [{ teamId: 't1', role: 'member' }] });
+assert.match(member, /On a team/); assert.ok(!/Running an event|>Admin<|Coaching/.test(member));
+assert.match(txt({ role: 'admin' }, [{ id: 'e' }]), />Admin</);
+assert.match(txt({ role: 'judge' }), /Scoring matches/);
+console.log('help checks passed');

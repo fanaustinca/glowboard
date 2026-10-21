@@ -360,3 +360,9 @@ body.bs-open { overflow: hidden; }
 .tm-pop[hidden] { display: none; }
 .tm-pop .card { max-width: 26rem; text-align: center; margin: 0; }
 .tm-pop-ico { font-size: 3rem; }
+
+/* Help */
+.help { display: grid; gap: 12px; }
+.help-sec h2 { margin: 0 0 4px; }
+.help-sec .where { margin: 0 0 6px; color: var(--muted); font-size: .9rem; }
+.help-sec ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px; }

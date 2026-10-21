@@ -304,7 +304,7 @@ ok('the pro coach now coaches t3 and t7 at once');
   ok('judges (unscoped, event-limited), hosts, listed referees and admins can submit the real app payload; members/anon/other events cannot; no replacing — a host deletes first');
 
   // ── editions: Founders (standard) + Future ──
-  const fst = defaultState('future'); fst.m.f03.cycled = 50; fst.m.f01.young = 3; fst.m.f01.grand = 3; fst.m.f01.hollow = 3; fst.m.f01.queen = true; fst.m.f02.base = 15; fst.m.f02.canopy = 15; fst.m.f06.added = 5; fst.m.f06.contained = 6; fst.m.f04.species = true; fst.m.f04.resources = true; fst.m.f05.haven = 20;
+  const fst = defaultState('future'); fst.m.f03.cycled = 50; fst.m.f01.young = 4; fst.m.f01.grand = 3; fst.m.f01.hollow = 3; fst.m.f01.queen = true; fst.m.f02.base = 5; fst.m.f02.canopy = 15; fst.m.f06.added = 5; fst.m.f06.contained = 21; fst.m.f04.species = true; fst.m.f04.resources = true; fst.m.f05.haven = 80;
   const fres = scoreAll(fst, 'future');
   assert.ok(fres.total > 1000, 'a legal Future maximum is above the old 1000 cap');
   const fpayload = (eventId, teamId, round, uid, o = {}) => ({ ...payload(eventId, teamId, round, uid), edition: 'future', total: fres.total, gp: fres.gp, state: fres.state, result: slim(fres), ...o });
@@ -320,6 +320,8 @@ ok('the pro coach now coaches t3 and t7 at once');
   await cannot('a host cannot change a team’s edition', updateDoc(doc(host, 'teams/t32'), { edition: 'founders' })); await cannot('a coach cannot change their team’s edition', updateDoc(doc(coach, 'teams/t1'), { edition: 'future' }));
   await can('admin creates an event for Future only', setDoc(doc(admin, 'events/evF'), { name: 'Future Day', editions: ['future'] })); await can('…for both editions', setDoc(doc(admin, 'events/evB'), { name: 'Both Day', editions: ['founders', 'future'] }));
   await can('…and an event with no editions field (Founders)', setDoc(doc(admin, 'events/evOld'), { name: 'Old style' }));
+  await can('admin changes an existing event\'s editions', updateDoc(doc(admin, 'events/evOld'), { editions: ['future'] })); await cannot('…but not to a made-up edition', updateDoc(doc(admin, 'events/evOld'), { editions: ['bogus'] }));
+  await cannot('a host cannot change an event\'s editions', updateDoc(doc(host, 'events/ev1'), { editions: ['future'] }));
   await cannot('an event with a made-up edition', setDoc(doc(admin, 'events/evX'), { name: 'X', editions: ['bogus'] })); await cannot('an event with an empty edition list', setDoc(doc(admin, 'events/evY'), { name: 'Y', editions: [] }));
   await cannot('an event listing editions three times', setDoc(doc(admin, 'events/evZ'), { name: 'Z', editions: ['future', 'future', 'founders'] }));
   await can('a team member saves a Future practice run', setDoc(doc(coach, 'practice/pf1'), { uid: 'u-coach', teamId: 't1', total: 1100, edition: 'future', createdAt: 5 }));
