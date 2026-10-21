@@ -197,7 +197,7 @@ export const EVENT_EDITION_CHOICES = [
 
 // The rulebook gives no limit for these piles (only the “max” printed on the scoresheet), so the counters stop at a
 // size that no real match can reach.
-export const FUTURE_COUNTS = { microbiome: 3, young: 4, youngScored: 3, canopy: 15, waterfall: 50, base: 50, haven: 50, invasiveAdded: 5, containment: 25 };
+export const FUTURE_COUNTS = { microbiome: 3, young: 3, canopy: 15, waterfall: 50, base: 50, haven: 50, invasiveAdded: 5, containment: 25 };
 // Interference penalties: 1st = −10, 2nd = −30 in total, 3rd = the match score is zero.
 export const FUTURE_PENALTIES = [
   { v: 0, label: '0', pts: 0 }, { v: 1, label: '1', pts: -10 }, { v: 2, label: '2', pts: -30 }, { v: 3, label: '3+', pts: null },
@@ -209,15 +209,13 @@ const FUTURE_RAW = [
     id: 'f01', num: 1, name: 'Mighty Microbiomes',
     notes: [
       'Keystone species must be placed loose in the microbiome (not touching equipment) to score.',
-      'The fourth keystone species in the young forest does not score for placement — it triggers the defeat of the invasive queen for the bonus.',
     ],
     fields: [
-      cnt('young', 'Keystone species in the young forest microbiome (the 4th does not score; it knocks down the invasive queen)', 20, FUTURE_COUNTS.young,
-        { scoreCap: FUTURE_COUNTS.youngScored }),
+      cnt('young', 'Keystone species in the young forest microbiome', 20, FUTURE_COUNTS.young),
       cnt('grand', 'Keystone species in the grand tree microbiome', 20, FUTURE_COUNTS.microbiome),
       cnt('hollow', 'Keystone species in the hollow tree microbiome', 20, FUTURE_COUNTS.microbiome),
-      chk('queen', 'At least three keystone species in the young forest and the invasive queen on the opposite side of the field is knocked down (needs the 4th species in the young forest)', 40,
-        { bonus: true, requires: (s) => s.young >= 4 }),
+      chk('queen', 'At least three keystone species in the young forest and the invasive queen on the opposite side of the field is knocked down', 40,
+        { bonus: true, requires: (s) => s.young >= 3 }),
     ],
   },
   {

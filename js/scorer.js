@@ -191,7 +191,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
       const voided = !!r.voided;
       card.classList.toggle('scored', r.points > 0);
       card.classList.toggle('voided', voided);
-      card.querySelector('[data-role=mscore]').textContent = `${r.points} / ${maxScores(edition).perMission[m.id]}`;
+      card.querySelector('[data-role=mscore]').textContent = `${r.points} pts`;
       for (const f of m.fields) {
         const el = card.querySelector(`[data-k="${f.key}"]`);
         const locked = f.requires ? !f.requires(ms) : false;

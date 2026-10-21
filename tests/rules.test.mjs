@@ -157,7 +157,8 @@ test('rounds allowed by the rules == MATCHES_PER_TEAM', () => {
 });
 test('score upper bound leaves headroom above the true maximum', () => {
   const m = code.match(/v <= (\d+)/); assert.ok(m);
-  assert.ok(+m[1] >= maxScores().total && +m[1] <= maxScores().total * 3, `${m[1]} vs ${maxScores().total}`);
+  const top = Math.max(maxScores().total, maxScores('future').total);
+  assert.ok(+m[1] >= top && +m[1] <= top * 3, `${m[1]} vs ${top}`);
 });
 test('practice: team-scoped — only that team’s members (and admins) read, create, edit and delete', () => {
   const b = block('practice');

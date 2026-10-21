@@ -216,10 +216,9 @@ test('unscored teams are listed last with no rank; unknown team ids are ignored'
 const clampN = (v, hi) => Math.max(0, Math.min(hi, Math.trunc(+v || 0)));
 function futureOracle(r) {
   const m = r.m;
-  // young forest takes up to 4 (the 4th triggers the queen and scores nothing), grand and hollow up to 3
-  const young = clampN(m.f01.young, 4), grand = clampN(m.f01.grand, 3), hollow = clampN(m.f01.hollow, 3);
-  let f01 = 20 * (Math.min(young, 3) + grand + hollow);
-  if (m.f01.queen === true && young >= 4) f01 += 40; // bonus: the 4th species in the young forest knocks the queen down
+  const young = clampN(m.f01.young, 3), grand = clampN(m.f01.grand, 3), hollow = clampN(m.f01.hollow, 3);
+  let f01 = 20 * (young + grand + hollow);
+  if (m.f01.queen === true && young >= 3) f01 += 40; // bonus: 3 species in the young forest + the queen knocked down
   const f02 = 5 * clampN(m.f02.base, 50) + 10 * clampN(m.f02.canopy, 15);
   const f03 = 5 * clampN(m.f03.cycled, 50);
   const f04 = (m.f04.species === true ? 30 : 0) + (m.f04.resources === true ? 20 : 0);
@@ -232,7 +231,7 @@ function futureOracle(r) {
 test('future: missions match the printed scoresheet (names, point values, caps)', () => {
   assert.deepEqual(FUTURE_MISSIONS.map((m) => m.name), ['Mighty Microbiomes', 'Roots of Renewal', 'Cave Waterfall', 'Rainforest Awakening', 'Central Haven', 'Level Up: Invasive Attack']);
   const f = (id, k) => FUTURE_MISSIONS.find((m) => m.id === id).fields.find((x) => x.key === k);
-  assert.equal(f('f01', 'young').each, 20); assert.equal(f('f01', 'young').max, 4); assert.equal(f('f01', 'grand').max, 3); assert.equal(f('f01', 'queen').pts, 40);
+  assert.equal(f('f01', 'young').each, 20); assert.equal(f('f01', 'young').max, 3); assert.equal(f('f01', 'grand').max, 3); assert.equal(f('f01', 'queen').pts, 40);
   assert.equal(f('f02', 'base').each, 5); assert.equal(f('f02', 'canopy').each, 10); assert.equal(f('f02', 'canopy').max, 15);
   assert.equal(f('f03', 'cycled').each, 5); assert.equal(f('f03', 'cycled').max, 50);
   assert.equal(f('f04', 'species').pts, 30); assert.equal(f('f04', 'resources').pts, 20);
@@ -252,11 +251,10 @@ test('future: every mission state agrees with the oracle (all counts, all bonus/
   }
   console.log(`        (${n} future mission states checked)`);
 });
-test('future: the invasive-queen bonus needs the 4th keystone species in the young forest', () => {
+test('future: the invasive-queen bonus needs three keystone species in the young forest', () => {
   const st = defaultState('future'); st.m.f01.queen = true; st.m.f01.young = 2;
   assert.equal(scoreAll(st, 'future').total, 40, 'bonus ignored: only the 2 species score');
-  st.m.f01.young = 3; assert.equal(scoreAll(st, 'future').total, 60, 'three species and no 4th: no queen defeat, no bonus');
-  st.m.f01.young = 4; assert.equal(scoreAll(st, 'future').total, 100, '3 score + the 4th triggers the bonus');
+  st.m.f01.young = 3; assert.equal(scoreAll(st, 'future').total, 100, 'three species + the queen: 60 + 40');
   st.m.f01.grand = 3; st.m.f01.hollow = 3; assert.equal(scoreAll(st, 'future').total, 220);
 });
 test('future: penalties — 1st −10, 2nd −30 in total, 3rd zeroes the match, never below 0', () => {

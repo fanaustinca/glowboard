@@ -304,14 +304,14 @@ ok('the pro coach now coaches t3 and t7 at once');
   ok('judges (unscoped, event-limited), hosts, listed referees and admins can submit the real app payload; members/anon/other events cannot; no replacing — a host deletes first');
 
   // ── editions: Founders (standard) + Future ──
-  const fst = defaultState('future'); fst.m.f03.cycled = 50; fst.m.f01.young = 4; fst.m.f01.grand = 3; fst.m.f01.hollow = 3; fst.m.f01.queen = true; fst.m.f02.base = 5; fst.m.f02.canopy = 15; fst.m.f06.added = 5; fst.m.f06.contained = 21; fst.m.f04.species = true; fst.m.f04.resources = true; fst.m.f05.haven = 80;
+  const fst = defaultState('future'); fst.m.f03.cycled = 50; fst.m.f01.young = 3; fst.m.f01.grand = 3; fst.m.f01.hollow = 3; fst.m.f01.queen = true; fst.m.f02.base = 50; fst.m.f02.canopy = 15; fst.m.f06.added = 5; fst.m.f06.contained = 25; fst.m.f04.species = true; fst.m.f04.resources = true; fst.m.f05.haven = 50;
   const fres = scoreAll(fst, 'future');
   assert.ok(fres.total > 1000, 'a legal Future maximum is above the old 1000 cap');
   const fpayload = (eventId, teamId, round, uid, o = {}) => ({ ...payload(eventId, teamId, round, uid), edition: 'future', total: fres.total, gp: fres.gp, state: fres.state, result: slim(fres), ...o });
   const fsubmit = (db, eventId, teamId, round, uid, o) => { const id = `${eventId}_${teamId}_R${round}`; const b = writeBatch(db); b.set(doc(db, 'scores', id), fpayload(eventId, teamId, round, uid, o)); b.set(doc(db, 'signatures', id), { signature: sig, judgeUid: uid, createdAt: Date.now() }); return b.commit(); };
   await can('judge submits a Future score (above 1000)', fsubmit(judge, 'ev2', 't7', 1, 'u-judge'));
   await cannot('a made-up edition', fsubmit(judge, 'ev2', 't7', 2, 'u-judge', { edition: 'bogus' }));
-  await cannot('a total above 1500', fsubmit(judge, 'ev2', 't7', 2, 'u-judge', { total: 1501 }));
+  await cannot('a total above 2000', fsubmit(judge, 'ev2', 't7', 2, 'u-judge', { total: 2001 }));
   await can('a score with no edition field (data from before editions)', submit(judge, 'ev2', 't7', 3, 'u-judge'));
   await can('admin creates a Future team', setDoc(doc(admin, 'teams/t30'), { number: 30, name: 'Thirty', edition: 'future', createdBy: 'admin@x.com' }));
   await cannot('admin creates a team with a made-up edition', setDoc(doc(admin, 'teams/t31'), { number: 31, name: 'ThirtyOne', edition: 'bogus', createdBy: 'admin@x.com' }));

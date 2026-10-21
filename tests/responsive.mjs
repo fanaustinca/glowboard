@@ -214,26 +214,26 @@ await check('live total tracks every control exactly like the scoring engine', a
   const want = scoreAll(expect).total;
   assert.equal(await total(), want, 'total');
   assert.equal(await text(page, '#rv-total'), String(want), 'review total');
-  assert.equal(await text(page, '#mission-m02 [data-role=mscore]'), '30 / 30');
+  assert.equal(await text(page, '#mission-m02 [data-role=mscore]'), '30 pts');
 });
 await check('bonus controls are locked until their base is met, and clear when it is removed', async () => {
   assert.equal(await page.$eval(sc('m01', 'lidar'), (e) => e.disabled || e.classList.contains('locked')), true === false ? 0 : false);
   await tick(sc('m01', 'drone')); // untick drone → lidar must clear
   assert.equal(await page.$eval(sc('m01', 'lidar'), (e) => e.getAttribute('aria-checked')), 'false');
   assert.equal(await page.$eval(sc('m01', 'lidar'), (e) => e.classList.contains('locked')), true);
-  assert.equal(await text(page, '#mission-m01 [data-role=mscore]'), '0 / 30');
+  assert.equal(await text(page, '#mission-m01 [data-role=mscore]'), '0 pts');
   expect.m.m01.drone = false; expect.m.m01.lidar = false;
   assert.equal(await total(), scoreAll(expect).total);
 });
 await check('Lucky Leaves: katydid outside habitat at end zeroes the mission', async () => {
   await tick(sc('m04', 'katOutEnd')); expect.m.m04.katOutEnd = true;
-  assert.equal(await text(page, '#mission-m04 [data-role=mscore]'), '0 / 30');
+  assert.equal(await text(page, '#mission-m04 [data-role=mscore]'), '0 pts');
   assert.equal(await total(), scoreAll(expect).total);
   await tick(sc('m04', 'katOutEnd')); expect.m.m04.katOutEnd = false;
 });
 await check('no-equipment toggle voids the mission', async () => {
   await tick(sc('m09', 'eq')); expect.m.m09.eq = true;
-  assert.equal(await text(page, '#mission-m09 [data-role=mscore]'), '0 / 30');
+  assert.equal(await text(page, '#mission-m09 [data-role=mscore]'), '0 pts');
   assert.equal(await total(), scoreAll(expect).total);
   await tick(sc('m09', 'eq')); expect.m.m09.eq = false;
 });
@@ -620,7 +620,7 @@ await check('Future Edition: scoring tool, penalties, mission images, an event r
   assert.ok(await page.$$eval('img.mimg', (im) => im.every((i) => i.naturalWidth > 0 && /\/f0\d\.jpg$/.test(i.getAttribute('src')))), 'every Future mission shows its picture');
   const inc = (m, k, n) => page.evaluate((m2, k2, n2) => { for (let i = 0; i < n2; i++) document.querySelector(`[data-m="${m2}"][data-k="${k2}"] [data-act="inc"]`).click(); }, m, k, n);
   await inc('f03', 'cycled', 4); assert.equal(await total(), 20);
-  await inc('f01', 'young', 3); assert.equal(await page.$eval(sc('f01', 'queen'), (e) => e.disabled || e.classList.contains('locked')), true, 'queen bonus needs the 4th species');
+  await inc('f01', 'young', 2); assert.equal(await page.$eval(sc('f01', 'queen'), (e) => e.disabled || e.classList.contains('locked')), true, 'queen bonus needs 3 species');
   await inc('f01', 'young', 1); await tap(page, sc('f01', 'queen')); assert.equal(await total(), 20 + 60 + 40);
   await tap(page, '#sc-pen [data-i="1"]'); assert.equal(await total(), 110);
   await tap(page, '#sc-pen [data-i="2"]'); assert.equal(await total(), 90);

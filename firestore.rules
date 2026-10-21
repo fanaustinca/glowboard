@@ -94,7 +94,7 @@ service cloud.firestore {
 
     // Highest possible Robot Game score is under 1100 in either edition (see js/scoring.js maxScores()).
     function validTotal(v) {
-      return v is int && v >= 0 && v <= 1500;
+      return v is int && v >= 0 && v <= 2000;
     }
     // Editions: 'founders' (standard) and 'future'. Missing = founders (data from before editions existed).
     function validEdition(v) {
