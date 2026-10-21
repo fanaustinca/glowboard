@@ -108,7 +108,8 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
         </div></div>
     </section>`;
     return `
-    <div class="totalbar" role="status" aria-label="Running total"><div><span class="tl">Total</span><b id="sc-total" class="tv">0</b></div></div>
+    <div class="totalbar" role="status" aria-label="Running total"><div><span class="tl">Total</span><b id="sc-total" class="tv">0</b>${future() ? '' : `<span class="tmax">/ ${maxScores(edition).total}</span>`}</div>
+      ${future() ? '' : '<div class="tbar"><i id="sc-bar"></i></div>'}</div>
     ${pre}
     ${rules}
     <div class="missions">${MS().map(missionHTML).join('')}</div>
@@ -191,7 +192,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
       const voided = !!r.voided;
       card.classList.toggle('scored', r.points > 0);
       card.classList.toggle('voided', voided);
-      card.querySelector('[data-role=mscore]').textContent = `${r.points} pts`;
+      card.querySelector('[data-role=mscore]').textContent = future() ? `${r.points} pts` : `${r.points} / ${maxScores(edition).perMission[m.id]}`;
       for (const f of m.fields) {
         const el = card.querySelector(`[data-k="${f.key}"]`);
         const locked = f.requires ? !f.requires(ms) : false;
@@ -214,6 +215,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     }
 
     $('#sc-total').textContent = res.total;
+    if (!future()) $('#sc-bar').style.width = `${Math.min(100, (res.total / maxScores(edition).total) * 100)}%`;
     $('#rv-total').textContent = res.total;
     const rows = [
       ...(future()

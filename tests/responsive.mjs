@@ -214,26 +214,26 @@ await check('live total tracks every control exactly like the scoring engine', a
   const want = scoreAll(expect).total;
   assert.equal(await total(), want, 'total');
   assert.equal(await text(page, '#rv-total'), String(want), 'review total');
-  assert.equal(await text(page, '#mission-m02 [data-role=mscore]'), '30 pts');
+  assert.equal(await text(page, '#mission-m02 [data-role=mscore]'), '30 / 30');
 });
 await check('bonus controls are locked until their base is met, and clear when it is removed', async () => {
   assert.equal(await page.$eval(sc('m01', 'lidar'), (e) => e.disabled || e.classList.contains('locked')), true === false ? 0 : false);
   await tick(sc('m01', 'drone')); // untick drone → lidar must clear
   assert.equal(await page.$eval(sc('m01', 'lidar'), (e) => e.getAttribute('aria-checked')), 'false');
   assert.equal(await page.$eval(sc('m01', 'lidar'), (e) => e.classList.contains('locked')), true);
-  assert.equal(await text(page, '#mission-m01 [data-role=mscore]'), '0 pts');
+  assert.equal(await text(page, '#mission-m01 [data-role=mscore]'), '0 / 30');
   expect.m.m01.drone = false; expect.m.m01.lidar = false;
   assert.equal(await total(), scoreAll(expect).total);
 });
 await check('Lucky Leaves: katydid outside habitat at end zeroes the mission', async () => {
   await tick(sc('m04', 'katOutEnd')); expect.m.m04.katOutEnd = true;
-  assert.equal(await text(page, '#mission-m04 [data-role=mscore]'), '0 pts');
+  assert.equal(await text(page, '#mission-m04 [data-role=mscore]'), '0 / 30');
   assert.equal(await total(), scoreAll(expect).total);
   await tick(sc('m04', 'katOutEnd')); expect.m.m04.katOutEnd = false;
 });
 await check('no-equipment toggle voids the mission', async () => {
   await tick(sc('m09', 'eq')); expect.m.m09.eq = true;
-  assert.equal(await text(page, '#mission-m09 [data-role=mscore]'), '0 pts');
+  assert.equal(await text(page, '#mission-m09 [data-role=mscore]'), '0 / 30');
   assert.equal(await total(), scoreAll(expect).total);
   await tick(sc('m09', 'eq')); expect.m.m09.eq = false;
 });
