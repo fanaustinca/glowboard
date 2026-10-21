@@ -17,8 +17,8 @@ function fieldHTML(m, f) {
   }
   if (f.type === 'count') {
     return `<div class="opt cnt" ${base}>
-      <span class="lbl">${esc(f.label)}<em class="note">${f.each} pts each · max <b data-role="max">${f.max}</b></em></span>
-      ${f.slider ? `<span class="slidr"><input type="range" min="0" max="${f.max}" value="0" data-act="range" aria-label="${esc(f.label)}"><input type="number" inputmode="numeric" min="0" max="${f.max}" value="0" data-act="num" aria-label="${esc(f.label)} (type a number)"></span>` : ''}
+      <span class="lbl">${esc(f.label)}<em class="note">${f.each} pts each</em></span>
+      ${f.max >= 10 ? `<span class="slidr"><input type="range" min="0" max="${f.max}" value="0" data-act="range" aria-label="${esc(f.label)}"><input type="number" inputmode="numeric" min="0" max="${f.max}" value="0" data-act="num" aria-label="${esc(f.label)} (type a number)"></span>` : ''}
       <span class="stepper"><button type="button" data-act="dec" aria-label="Fewer: ${esc(f.label)}">−</button><output aria-live="polite">0</output><button type="button" data-act="inc" aria-label="More: ${esc(f.label)}">+</button></span></div>`;
   }
   const opts = f.options.map((o, i) => `<button type="button" role="radio" aria-checked="false" data-i="${i}">${esc(o.label)}${o.pts ? `<small>${sign(o.pts)}</small>` : ''}</button>`).join('');
@@ -75,7 +75,6 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
 
   // The part of the form that depends on the edition: total bar, edition-only sections, missions, final review.
   const dynHTML = () => {
-    const max = maxScores(edition);
     const rules = future() ? `<details class="card rules-ref"><summary>Scoring rules reminder (Future Edition Rulebook, Scoring &amp; Penalties)</summary><ul>
       <li><b>Scoring:</b> scores are based on the final visible conditions on your team’s side of the shared field when time ends. Lines and the airspace above an area count as “in” it.</li>
       <li><b>Interference penalties (rule 21):</b> 1st = −10 points, 2nd = −20 more (−30 in total), 3rd = the match score is zero.</li>
@@ -109,8 +108,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
         </div></div>
     </section>`;
     return `
-    <div class="totalbar" role="status" aria-label="Running total"><div><span class="tl">Total</span><b id="sc-total" class="tv">0</b><span class="tmax">/ ${max.total}</span></div>
-      <div class="tbar"><i id="sc-bar"></i></div></div>
+    <div class="totalbar" role="status" aria-label="Running total"><div><span class="tl">Total</span><b id="sc-total" class="tv">0</b></div></div>
     ${pre}
     ${rules}
     <div class="missions">${MS().map(missionHTML).join('')}</div>
@@ -177,7 +175,6 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     // Clear dependents whose base condition was removed (e.g. un-tick drone → bonus clears).
     for (const m of MS()) state.m[m.id] = normalizeMission(m, state.m[m.id], state.m);
     const res = scoreAll(state, edition);
-    const max = maxScores(edition);
 
     $('#sc-ed').querySelectorAll('button').forEach((b) => { b.setAttribute('aria-checked', String(b.dataset.ed === edition)); b.disabled = official && !eventEditions(curEvent()).includes(b.dataset.ed); });
     if (future()) $('#sc-pen').querySelectorAll('button').forEach((b) => b.setAttribute('aria-checked', String(+b.dataset.i === state.penalties)));
@@ -194,7 +191,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
       const voided = !!r.voided;
       card.classList.toggle('scored', r.points > 0);
       card.classList.toggle('voided', voided);
-      card.querySelector('[data-role=mscore]').textContent = `${r.points} / ${max.perMission[m.id]}`;
+      card.querySelector('[data-role=mscore]').textContent = `${r.points} / ${maxScores(edition).perMission[m.id]}`;
       for (const f of m.fields) {
         const el = card.querySelector(`[data-k="${f.key}"]`);
         const locked = f.requires ? !f.requires(ms) : false;
@@ -203,13 +200,11 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
         if (f.type === 'check') el.setAttribute('aria-checked', String(ms[f.key]));
         else if (f.type === 'count') {
           let cap = f.maxFn ? Math.min(f.max, f.maxFn(ms)) : f.max;
-          if (f.poolFn) cap = Math.max(0, Math.min(cap, f.poolFn(state.m)));
           el.querySelector('output').textContent = ms[f.key];
           const rg = el.querySelector('[data-act=range]'), nm = el.querySelector('[data-act=num]');
           if (rg) { rg.value = ms[f.key]; rg.max = cap; rg.disabled = locked; }
           if (nm && document.activeElement !== nm) nm.value = ms[f.key];
           if (nm) { nm.max = cap; nm.disabled = locked; }
-          el.querySelector('[data-role=max]').textContent = cap;
           el.querySelector('[data-act=dec]').disabled = locked || ms[f.key] <= 0;
           el.querySelector('[data-act=inc]').disabled = locked || ms[f.key] >= cap;
         } else el.querySelectorAll('[role=radio]').forEach((b) => b.setAttribute('aria-checked', String(f.options[+b.dataset.i].v === ms[f.key])));
@@ -219,7 +214,6 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     }
 
     $('#sc-total').textContent = res.total;
-    $('#sc-bar').style.width = `${Math.min(100, (res.total / max.total) * 100)}%`;
     $('#rv-total').textContent = res.total;
     const rows = [
       ...(future()

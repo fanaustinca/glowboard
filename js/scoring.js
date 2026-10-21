@@ -39,7 +39,6 @@ export function normalizeMission(m, input, all) {
     else if (f.type === 'count') s[f.key] = clamp(v, 0, f.max);
     else s[f.key] = f.options.some((o) => o.v === v) ? v : f.def;
     if (f.type === 'count' && f.maxFn) s[f.key] = Math.min(s[f.key], f.maxFn(s));
-    if (f.type === 'count' && f.poolFn && all) s[f.key] = Math.max(0, Math.min(s[f.key], f.poolFn(all)));
     if (f.requires && !f.requires(s)) s[f.key] = f.def;
   }
   return s;
@@ -117,26 +116,6 @@ function* domain(m, i = 0, cur = {}) {
 }
 export function* missionDomain(m) { for (const d of domain(m)) for (const eq of [false, true]) yield { ...d, eq }; }
 
-// Future pieces are shared between missions, so the best match is not the sum of the best missions:
-// try every split of the pieces between the microbiomes, the tree and the haven.
-function futureMax(per) {
-  const best = (id, key) => {
-    const m = FUTURE_MISSIONS.find((x) => x.id === id), by = {};
-    for (const raw of missionDomain(m)) {
-      const n = normalizeMission(m, raw), used = key(n);
-      by[used] = Math.max(by[used] ?? 0, scoreMission(m, n).points);
-    }
-    return by;
-  };
-  const a = best('f01', (n) => n.young + n.grand + n.hollow), b = best('f02', (n) => n.base + n.canopy);
-  const haven = FUTURE_MISSIONS.find((x) => x.id === 'f05').fields[0];
-  let top = 0;
-  for (const [k, pa] of Object.entries(a)) for (const [j, pb] of Object.entries(b)) {
-    top = Math.max(top, pa + pb + haven.each * Math.max(0, haven.max - k - j));
-  }
-  return top + per.f03 + per.f04 + per.f06;
-}
-
 const _max = {};
 export function maxScores(ed = 'founders') {
   ed = editionOf(ed);
@@ -148,7 +127,7 @@ export function maxScores(ed = 'founders') {
     perMission[m.id] = best;
   }
   const sum = Object.values(perMission).reduce((a, b) => a + b, 0);
-  const total = ed === 'future' ? futureMax(perMission) : EQUIPMENT_INSPECTION_POINTS + Math.max(...TOKEN_POINTS) + sum;
+  const total = ed === 'future' ? sum : EQUIPMENT_INSPECTION_POINTS + Math.max(...TOKEN_POINTS) + sum;
   return (_max[ed] = { perMission, total });
 }
 

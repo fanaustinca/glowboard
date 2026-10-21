@@ -197,7 +197,7 @@ export const EVENT_EDITION_CHOICES = [
 
 // The rulebook gives no limit for these piles (only the “max” printed on the scoresheet), so the counters stop at a
 // size that no real match can reach.
-export const FUTURE_COUNTS = { microbiome: 3, canopy: 15, waterfall: 50, resourcesTotal: 20, speciesTotal: 20, invasiveTotal: 20, young: 4, youngScored: 3, haven: 80, invasiveAdded: 5, containment: 21 };
+export const FUTURE_COUNTS = { microbiome: 3, young: 4, youngScored: 3, canopy: 15, waterfall: 50, base: 50, haven: 50, invasiveAdded: 5, containment: 25 };
 // Interference penalties: 1st = −10, 2nd = −30 in total, 3rd = the match score is zero.
 export const FUTURE_PENALTIES = [
   { v: 0, label: '0', pts: 0 }, { v: 1, label: '1', pts: -10 }, { v: 2, label: '2', pts: -30 }, { v: 3, label: '3+', pts: null },
@@ -208,33 +208,30 @@ const FUTURE_RAW = [
   {
     id: 'f01', num: 1, name: 'Mighty Microbiomes',
     notes: [
-      'The fourth keystone species in the young forest triggers the queen bonus and scores nothing itself: at most 3 score in each microbiome.',
       'Keystone species must be placed loose in the microbiome (not touching equipment) to score.',
       'The fourth keystone species in the young forest does not score for placement — it triggers the defeat of the invasive queen for the bonus.',
     ],
     fields: [
       cnt('young', 'Keystone species in the young forest microbiome (the 4th does not score; it knocks down the invasive queen)', 20, FUTURE_COUNTS.young,
-        { scoreCap: FUTURE_COUNTS.youngScored, maxFn: (s) => FUTURE_COUNTS.speciesTotal - s.grand - s.hollow }),
-      cnt('grand', 'Keystone species in the grand tree microbiome', 20, FUTURE_COUNTS.microbiome,
-        { maxFn: (s) => FUTURE_COUNTS.speciesTotal - s.young - s.hollow }),
-      cnt('hollow', 'Keystone species in the hollow tree microbiome', 20, FUTURE_COUNTS.microbiome,
-        { maxFn: (s) => FUTURE_COUNTS.speciesTotal - s.young - s.grand }),
+        { scoreCap: FUTURE_COUNTS.youngScored }),
+      cnt('grand', 'Keystone species in the grand tree microbiome', 20, FUTURE_COUNTS.microbiome),
+      cnt('hollow', 'Keystone species in the hollow tree microbiome', 20, FUTURE_COUNTS.microbiome),
       chk('queen', 'At least three keystone species in the young forest and the invasive queen on the opposite side of the field is knocked down (needs the 4th species in the young forest)', 40,
         { bonus: true, requires: (s) => s.young >= 4 }),
     ],
   },
   {
     id: 'f02', num: 2, name: 'Roots of Renewal',
-    notes: ['There are 20 resources in total, shared between the base and the canopy chamber (the canopy holds at most 15). Resources must be cycled up the tree. Placing resources directly into the canopy chamber will not count.'],
+    notes: ['Resources must be cycled up the tree. Placing resources directly into the canopy chamber will not count.'],
     fields: [
-      cnt('base', 'Resources in the grand tree base', 5, FUTURE_COUNTS.resourcesTotal, { maxFn: (s) => FUTURE_COUNTS.resourcesTotal - s.canopy }),
-      cnt('canopy', 'Resources in the canopy chamber (max 15)', 10, FUTURE_COUNTS.canopy, { maxFn: (s) => FUTURE_COUNTS.resourcesTotal - s.base }),
+      cnt('base', 'Resources in the grand tree base', 5, FUTURE_COUNTS.base),
+      cnt('canopy', 'Resources in the canopy chamber', 10, FUTURE_COUNTS.canopy),
     ],
   },
   {
     id: 'f03', num: 3, name: 'Cave Waterfall',
     notes: ['Species cycled through the waterfall advance the counter — the mission result is the number shown on the counter at the end of the match. The counter may not be advanced any other way.'],
-    fields: [cnt('cycled', 'Keystone species cycled through the cave waterfall', 5, FUTURE_COUNTS.waterfall, { slider: true })],
+    fields: [cnt('cycled', 'Keystone species cycled through the cave waterfall', 5, FUTURE_COUNTS.waterfall)],
   },
   {
     id: 'f04', num: 4, name: 'Rainforest Awakening',
@@ -245,14 +242,14 @@ const FUTURE_RAW = [
   },
   {
     id: 'f05', num: 5, name: 'Central Haven',
-    notes: ['Cooperative: any keystone species or resources resting completely in the central haven at the end of the match score, whichever team delivered them. Both teams get the full shared score. There are 80 tokens in all (20 resources + 20 keystone species per team), so tokens placed elsewhere on your field cannot also be in the haven.'],
-    fields: [cnt('haven', 'Keystone species or resources resting completely in the central haven', 5, FUTURE_COUNTS.haven, { poolFn: (all) => FUTURE_COUNTS.haven - all.f01.young - all.f01.grand - all.f01.hollow - all.f02.base - all.f02.canopy })],
+    notes: ['Cooperative: any keystone species or resources resting completely in the central haven at the end of the match score, whichever team delivered them. Both teams get the full shared score.'],
+    fields: [cnt('haven', 'Keystone species or resources resting completely in the central haven', 5, FUTURE_COUNTS.haven)],
   },
   {
     id: 'f06', num: 6, name: 'Level Up: Invasive Attack',
     notes: [
       'Optional. Invasive species are placed during pre-match setup; the invasive queen is required but does not score at setup.',
-      'There are 20 invasive species in all, plus the queen; delivering the queen to the containment zone also scores 10.',
+      'Delivering the queen to the containment zone also scores 10.',
     ],
     fields: [
       cnt('added', 'Invasive species added at setup', 20, FUTURE_COUNTS.invasiveAdded),
