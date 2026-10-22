@@ -21,7 +21,7 @@ function fieldHTML(m, f) {
       ${f.max >= 10 ? `<span class="slidr"><input type="range" min="0" max="${f.max}" value="0" data-act="range" aria-label="${esc(f.label)}"><input type="number" inputmode="numeric" min="0" max="${f.max}" value="0" data-act="num" aria-label="${esc(f.label)} (type a number)"></span>` : ''}
       <span class="stepper"><button type="button" data-act="dec" aria-label="Fewer: ${esc(f.label)}">−</button><output aria-live="polite">0</output><button type="button" data-act="inc" aria-label="More: ${esc(f.label)}">+</button></span></div>`;
   }
-  const opts = f.options.map((o, i) => `<button type="button" role="radio" aria-checked="false" data-i="${i}">${esc(o.label)}${o.pts ? `<small>${sign(o.pts)}</small>` : ''}</button>`).join('');
+  const opts = f.options.map((o, i) => `<button type="button" role="radio" aria-checked="false" data-i="${i}">${esc(o.label)}${o.tag ? `<small>${esc(o.tag)}</small>` : o.pts ? `<small>${sign(o.pts)}</small>` : ''}</button>`).join('');
   return `<div class="opt segf" ${base}><span class="lbl">${esc(f.label)}</span><div class="seg" role="radiogroup" aria-label="${esc(f.label)}">${opts}</div></div>`;
 }
 

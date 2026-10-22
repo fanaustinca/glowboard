@@ -57,7 +57,7 @@ const RAW = [
       seg('leaves', 'Leaves completely removed (no longer touching the nest)', [
         { v: 0, label: 'None', pts: 0 },
         { v: 1, label: 'One leaf', pts: 10 },
-        { v: 2, label: 'Both leaves', pts: 10 }, // first leaf = 10; second leaf is scored as part of the bonus
+        { v: 2, label: 'Both leaves', pts: 10, tag: '+20 bonus' }, // first leaf = 10; the second leaf is scored as the +20 bonus (needs the katydid in its original position)
       ]),
       chk('katOriginal', 'Katydid in its original starting position', 0, { note: 'needed for bonus' }),
       chk('katLeft', 'Katydid was completely outside the habitat at any time', 0, { note: 'cancels bonus', danger: true }),
