@@ -1,10 +1,10 @@
 // Page views. Each view: (root, ctx) => { update?(), destroy?() }.
 // ctx: { store, teams(), scores(), config(), user(), go(hash) }
-import { standings, maxScores, editionOf } from './scoring.js';
+import { standings, maxScores, editionOf, scoreAll, randomState } from './scoring.js';
 import { MISSIONS, FUTURE_MISSIONS, MATCHES_PER_TEAM, SEASON, EDITIONS, EVENT_EDITION_CHOICES } from './missions.js';
 import { mountScorer } from './scorer.js';
-import { ROLE_LABEL, canScore, eventTeams, eventEditions, eventBoards, teamEdition, normEmail, EMAIL_RE, DEMO_ACCOUNTS, hostedEvents, isCoachOn, coachTeamIds, rosterId } from './store.js';
-import { generateSchedule, groupSchedule, scheduleTable, clampConfig, SCHEDULE_DEFAULTS, LIMITS } from './schedule.js';
+import { ROLE_LABEL, canScore, slim, scoreId, eventTeams, eventEditions, eventBoards, teamEdition, normEmail, EMAIL_RE, DEMO_ACCOUNTS, hostedEvents, isCoachOn, coachTeamIds, rosterId } from './store.js';
+import { generateSchedule, groupSchedule, scheduleTable, tableLabel, scheduleIssues, restat, clampConfig, SCHEDULE_DEFAULTS, LIMITS } from './schedule.js';
 import { computeStats, filterRuns } from './stats.js';
 import { createTeam, addTeamPerson, genCode } from './teams.js';
 import { downloadCSV, copyForSheets } from './sheets.js';
@@ -14,7 +14,9 @@ import { esc, toast, timeAgo, modal, csvCell, download } from './ui.js';
 
 const max = (ed) => maxScores(ed);
 const editionsOf = (v) => (EVENT_EDITION_CHOICES.find((c) => c.v === v) || EVENT_EDITION_CHOICES[0]).editions;
-const editionChoice = (ev) => { const k = eventEditions(ev).join(); return (EVENT_EDITION_CHOICES.find((c) => c.editions.join() === k) || EVENT_EDITION_CHOICES[0]).v; };
+// What an event's "Editions" choice stores: its edition list plus whether it is a test event.
+const eventKind = (v) => ({ editions: editionsOf(v), test: Boolean(EVENT_EDITION_CHOICES.find((c) => c.v === v)?.test) });
+const editionChoice = (ev) => { if (ev?.test) return 'test'; const k = eventEditions(ev).join(); return (EVENT_EDITION_CHOICES.find((c) => !c.test && c.editions.join() === k) || EVENT_EDITION_CHOICES[0]).v; };
 const editionOptions = (eds, sel) => eds.map((x) => `<option value="${x}" ${x === sel ? 'selected' : ''}>${EDITIONS[x].long}</option>`).join('');
 // The non-mission lines of a saved result: equipment + tokens (Founders) or interference penalties (Future).
 const resultRows = (r) => (r?.edition === 'future'
@@ -22,6 +24,13 @@ const resultRows = (r) => (r?.edition === 'future'
   : `<tr><td>Equipment inspection</td><td class="num">${r?.equipment ?? 0}</td></tr><tr><td>Precision tokens</td><td class="num">${r?.tokens ?? 0}</td></tr>`);
 // up to 3 team colors as little dots
 export const teamDots = (t) => ((t?.colors || []).length ? `<span class="cdots" aria-hidden="true">${t.colors.map((c) => `<i style="background:${esc(c)}"></i>`).join('')}</span>` : '');
+// Event picker: one button per event (radio group) instead of a dropdown.
+const evChips = (events, selId) => events.slice().sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0))
+  .map((e) => `<button type="button" role="radio" aria-checked="${e.id === selId}" data-ev="${esc(e.id)}">${esc(e.name)}${e.live ? ' <small>live</small>' : ''}${e.test ? ' <small>test</small>' : ''}</button>`).join('');
+// Who may see a team's mission-by-mission breakdown: the team itself, admins, hosts and referees — not the public.
+const canSeeDetail = (u, teamId, scoreable = []) => Boolean(u) && (u.role === 'admin' || Boolean(u.host) || scoreable.length > 0 || (u.teams || []).some((x) => x.teamId === teamId));
+// 1×1 PNG: test events sign their generated scores with this
+const TEST_SIGNATURE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const EV_KEY = 'gb-event';
 const MANAGE_KEY = 'gb-manage-event';
 // The event shown on the public dashboard: the visitor's last pick, else the live one, else the newest.
@@ -39,11 +48,11 @@ export function dashboardView(root, ctx) {
         <h1 id="d-event">Event</h1><p class="muted" id="d-sub"></p></div>
       <dl class="stats" id="d-stats"></dl>
     </section>
-    <div class="toolbar"><label class="field evsel"><span class="sr">Event</span><select id="d-ev" aria-label="Event"></select></label><label class="search"><span class="sr">Find a team</span><input id="d-q" type="search" placeholder="Find a team or number…" autocomplete="off"></label><button type="button" class="btn" id="d-big">⛶ Big screen</button></div>
+    <div class="toolbar"><div class="evchips" id="d-ev" role="radiogroup" aria-label="Event"></div><label class="search"><span class="sr">Find a team</span><input id="d-q" type="search" placeholder="Find a team or number…" autocomplete="off"></label><button type="button" class="btn" id="d-big">⛶ Big screen</button></div>
     <div class="cols">
       <section class="card"><h2>Team standings</h2><p class="muted small" id="d-rankhint">Ranked by best official match.</p>
         <div id="d-rows"></div><p class="empty" id="d-empty" hidden>No teams yet.</p></section>
-      <aside class="card"><h2>Latest scores</h2><ul class="feed" id="d-feed"></ul><p class="empty" id="d-feedempty" hidden>Scores will appear here as judges submit them.</p></aside>
+      <aside class="card"><h2>Latest scores</h2><ul class="feed" id="d-feed"></ul><p class="empty" id="d-feedempty" hidden>Scores will appear here as referees submit them.</p></aside>
     </div>`;
   const $ = (s) => root.querySelector(s);
   let q = '', big = null;
@@ -56,15 +65,13 @@ export function dashboardView(root, ctx) {
   };
   $('#d-big').addEventListener('click', () => { big?.close(); big = openBigScreen(bigData, () => { big = null; }); });
   $('#d-q').addEventListener('input', (e) => { q = e.target.value.trim().toLowerCase(); render(); });
-  $('#d-ev').addEventListener('change', (e) => { try { localStorage.setItem(EV_KEY, e.target.value); } catch { /* ignore */ } render(); });
+  $('#d-ev').addEventListener('click', (e) => { const b = e.target.closest('[data-ev]'); if (!b) return; try { localStorage.setItem(EV_KEY, b.dataset.ev); } catch { /* ignore */ } render(); });
 
   function render() {
     const events = ctx.events(), ev = pickEvent(events);
     const evSel = $('#d-ev');
     evSel.hidden = events.length < 2;
-    evSel.innerHTML = events.slice().sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0))
-      .map((e) => `<option value="${esc(e.id)}">${esc(e.name)}${e.live ? ' · live' : ''}</option>`).join('');
-    if (ev) evSel.value = ev.id;
+    evSel.innerHTML = evChips(events, ev?.id);
     const boards = eventBoards(ev, ctx.teams(), ctx.scores());
     const teams = boards.flatMap((b) => b.rows.map((r) => r.team)), scores = ctx.scores().filter((x) => x.eventId === ev?.id && teams.some((t) => t.id === x.teamId));
     $('#d-event').textContent = ev?.name || 'FIRST LEGO League';
@@ -104,13 +111,15 @@ export function dashboardView(root, ctx) {
     const t = ctx.teams().find((x) => x.id === id); if (!t) return;
     const ev = pickEvent(ctx.events());
     const rs = ctx.scores().filter((s) => s.teamId === id && s.eventId === ev?.id && editionOf(s) === teamEdition(t)).sort((a, b) => a.round - b.round);
-    const body = rs.length ? rs.map((s) => `
+    const detail = canSeeDetail(ctx.user(), id, ctx.scoringEvents());
+    const body = rs.length ? (detail ? rs.map((s) => `
       <details class="round" ${rs.length === 1 ? 'open' : ''}><summary><b>Match ${s.round}</b><span>${s.total} pts</span></summary>
         <table class="rv-table"><tbody>
           ${resultRows(s.result)}
           ${s.result.missions.map((m) => `<tr class="${m.points ? 'has' : ''}"><td>M${String(m.num).padStart(2, '0')} ${esc(m.name)}</td><td class="num">${m.points}</td></tr>`).join('')}
         </tbody><tfoot><tr><th>Total</th><th class="num">${s.total}</th></tr></tfoot></table>
         <p class="muted small">Gracious Professionalism: ${s.gp} (Core Values) · scored ${timeAgo(s.createdAt)}</p></details>`).join('')
+      : `<table class="rv-table"><tbody>${rs.map((s) => `<tr><td>Match ${s.round}</td><td class="num">${s.total} pts</td></tr>`).join('')}</tbody></table><p class="muted small">Mission-by-mission scores are only shown to the team and event staff.</p>`)
       : '<p class="empty">No official scores yet.</p>';
     modal(body, { title: `#${t.number} ${t.name}` });
   }
@@ -134,7 +143,7 @@ export function loginView(root, ctx) {
   root.innerHTML = `
     <section class="card narrow">
       <h1>Sign in</h1>
-      <p class="muted">GlowBoard is a closed system. <b>Coaches, judges, event hosts and admins</b> sign in with the Google account they were added with. Viewers don’t need an account — the standings are public.</p>
+      <p class="muted">GlowBoard is a closed system. <b>Coaches, referees, event hosts and admins</b> sign in with the Google account they were added with. Viewers don’t need an account — the standings are public.</p>
       ${demo ? '' : '<button id="lg-google" class="btn primary big" type="button">Sign in with Google</button>'}
       <div id="lg-err" class="error" role="alert" hidden></div>
       <div class="or"><span>team members</span></div>
@@ -266,14 +275,14 @@ function showTeamCreated(res, showPw = true) {
 export function judgeView(root, ctx) {
   const u = ctx.user();
   if (!u) return gate(root, 'Referees, event hosts and admins sign in to enter official scores.', ctx);
-  if (!canScore(u, ctx.scoringEvents())) { root.innerHTML = '<section class="card narrow"><h1>Referees only</h1><p class="muted">This account isn’t a judge, referee or host for any event. Ask an admin to add it as a judge (Admin → People) or a host to add it as a referee.</p></section>'; return {}; }
+  if (!canScore(u, ctx.scoringEvents())) { root.innerHTML = '<section class="card narrow"><h1>Referees only</h1><p class="muted">This account isn’t a referee or host for any event. Ask an admin to add it as a referee (Admin → People) or a host to add it as a referee.</p></section>'; return {}; }
   root.innerHTML = '<h1 class="page-title">Official scoring</h1><div id="sc"></div>';
   const sc = mountScorer(root.querySelector('#sc'), { mode: 'official', store: ctx.store, teams: ctx.teams, scores: ctx.scores, events: ctx.scoringEvents, user: ctx.user });
   return { update: () => sc.refresh(), destroy: () => sc.destroy() };
 }
 
 // ───────────────────────────── Team stats ─────────────────────────────
-export function statsView(root, ctx, { onEdit = () => {} } = {}) {
+export function statsView(root, ctx, { onEdit = () => {}, readOnly = false } = {}) {
   const u = ctx.user();
   if (!u?.teamId) return { destroy() {} };
   root.innerHTML = '<div id="st"></div>';
@@ -339,7 +348,7 @@ export function statsView(root, ctx, { onEdit = () => {} } = {}) {
           <ul class="bars sub">${m.tasks.map((t) => `<li><span class="bl">${esc(t.label)}${t.kind === 'count' ? `<small>avg ${f1(t.avg)} of ${t.max}</small>` : ''}</span>${bar(t.rate)}<span class="bv">${r0(t.rate)}%</span></li>`).join('')}</ul></details>`).join('')}</div></section>
       <section class="card"><h2>Practice history</h2><ul class="history">${runs.slice().sort((a, b) => b.createdAt - a.createdAt).map((r) => `
         <li><button class="linkish" data-run="${esc(r.id)}"><b>${r.total}</b> pts <small>${new Date(r.createdAt).toLocaleString()}${r.by ? ` · ${esc(r.by)}` : ''}${r.note ? ` · “${esc(r.note)}”` : ''}</small></button>
-        <button class="btn ghost small" data-edit="${esc(r.id)}" aria-label="Edit run from ${new Date(r.createdAt).toLocaleString()}">Edit</button><button class="btn ghost small" data-del="${esc(r.id)}" aria-label="Delete run from ${new Date(r.createdAt).toLocaleString()}">Delete</button></li>`).join('')}</ul></section>`;
+        ${readOnly ? '' : `<button class="btn ghost small" data-edit="${esc(r.id)}" aria-label="Edit run from ${new Date(r.createdAt).toLocaleString()}">Edit</button><button class="btn ghost small" data-del="${esc(r.id)}" aria-label="Delete run from ${new Date(r.createdAt).toLocaleString()}">Delete</button>`}</li>`).join('')}</ul></section>`;
   }
   root.addEventListener('change', (e) => { if (e.target.id === 'st-range') { range = e.target.value; render(); } if (e.target.id === 'st-ed') { edSel = e.target.value; render(); } });
   root.addEventListener('click', async (e) => {
@@ -571,15 +580,15 @@ export function adminView(root, ctx) {
       <details class="bulk"><summary>Bulk add (paste “number, name, coach@gmail.com” per line — coach optional; uses the edition chosen above)</summary><textarea id="a-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers, coach@gmail.com&#10;5530, Byte Me"></textarea><button class="btn ghost" id="a-bulkgo" type="button">Add all</button></details>
       <ul class="admin-list" id="a-teams"></ul></section>
     <section class="card"><h2>People &amp; access</h2>
-      <p class="muted small">Add coaches, judges, hosts and admins by Google email. Hosts are set per event.</p>
+      <p class="muted small">Add coaches, referees, hosts and admins by Google email. Hosts are set per event.</p>
       <form id="a-user" class="grid-user" novalidate><label class="field"><span>Google email</span><input id="a-ue" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label>
-        <label class="field"><span>Role</span><select id="a-ur"><option value="coach">Coach of a team</option><option value="member">Team member</option><option value="judge">Judge</option><option value="host">Event host</option><option value="admin">Admin</option></select></label>
+        <label class="field"><span>Role</span><select id="a-ur"><option value="coach">Coach of a team</option><option value="member">Team member</option><option value="judge">Referee</option><option value="host">Event host</option><option value="admin">Admin</option></select></label>
         <label class="field" id="a-ut-wrap"><span>Team</span><select id="a-ut"></select></label>
         <label class="field"><span>Name <small>(optional)</small></span><input id="a-un" maxlength="40"></label><button class="btn primary">Add person</button></form>
       <div id="a-uerr" class="error" role="alert" hidden></div>
       <div id="a-users"></div></section>
     <section class="card"><h2>Official scores</h2><div class="row-actions"><button class="btn ghost" id="a-csv">Export CSV</button>${demo ? '<button class="btn ghost danger" id="a-reset">Reset demo data</button>' : ''}</div>
-      <div class="table-scroll"><table class="data"><thead><tr><th>Event</th><th>Team</th><th>Match</th><th class="num">Score</th><th>Judge</th><th></th></tr></thead><tbody id="a-scores"></tbody></table></div></section>`;
+      <div class="table-scroll"><table class="data"><thead><tr><th>Event</th><th>Team</th><th>Match</th><th class="num">Score</th><th>Referee</th><th></th></tr></thead><tbody id="a-scores"></tbody></table></div></section>`;
   const $ = (s) => root.querySelector(s);
   const hostCount = (id) => (ctx.eventHosts().find((h) => h.id === id)?.emails || []).length;
   const evName = (id) => ctx.events().find((e) => e.id === id)?.name || '—';
@@ -588,8 +597,8 @@ export function adminView(root, ctx) {
   function render() {
     const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
     const events = ctx.events().slice().sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0));
-    $('#a-events').innerHTML = events.map((e) => `<li><span><b>${esc(e.name)}</b>${e.live ? ' <span class="badge live-b">live</span>' : ''}<small class="block">${e.date ? esc(e.date) + ' · ' : ''}${eventEditions(e).map((x) => EDITIONS[x].label).join(' + ')} · ${e.teamIds?.length ? `${e.teamIds.length} teams` : 'all teams'} · ${hostCount(e.id)} host${hostCount(e.id) === 1 ? '' : 's'}${e.schedule?.rows?.length ? ' · schedule ✓' : ''}</small></span>
-      <span class="acts"><select class="evedsel" data-evedsel="${esc(e.id)}" aria-label="Editions for ${esc(e.name)}">${EVENT_EDITION_CHOICES.map((c) => `<option value="${c.v}"${editionChoice(e) === c.v ? ' selected' : ''}>${c.label}</option>`).join('')}</select><button class="btn ghost small" data-evmanage="${esc(e.id)}">Manage</button><button class="btn ghost small" data-evhosts="${esc(e.id)}">Hosts</button>${e.live ? '' : `<button class="btn ghost small" data-evlive="${esc(e.id)}">Make live</button>`}<button class="btn ghost small danger" data-delev="${esc(e.id)}" aria-label="Delete event ${esc(e.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No events yet — add one so judges can score.</li>';
+    $('#a-events').innerHTML = events.map((e) => `<li><span><b>${esc(e.name)}</b>${e.live ? ' <span class="badge live-b">live</span>' : ''}${e.test ? ' <span class="badge">test</span>' : ''}<small class="block">${e.date ? esc(e.date) + ' · ' : ''}${eventEditions(e).map((x) => EDITIONS[x].label).join(' + ')} · ${eventTeams(e, ctx.teams()).length} team${eventTeams(e, ctx.teams()).length === 1 ? "" : "s"} · ${hostCount(e.id)} host${hostCount(e.id) === 1 ? '' : 's'}${e.schedule?.rows?.length ? ' · schedule ✓' : ''}</small></span>
+      <span class="acts"><select class="evedsel" data-evedsel="${esc(e.id)}" aria-label="Editions for ${esc(e.name)}">${EVENT_EDITION_CHOICES.map((c) => `<option value="${c.v}"${editionChoice(e) === c.v ? ' selected' : ''}>${c.label}</option>`).join('')}</select><button class="btn ghost small" data-evrename="${esc(e.id)}">Rename</button><button class="btn ghost small" data-evmanage="${esc(e.id)}">Manage</button><button class="btn ghost small" data-evhosts="${esc(e.id)}">Hosts</button>${e.live ? '' : `<button class="btn ghost small" data-evlive="${esc(e.id)}">Make live</button>`}<button class="btn ghost small danger" data-delev="${esc(e.id)}" aria-label="Delete event ${esc(e.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No events yet — add one so judges can score.</li>';
     $('#a-teams').innerHTML = teams.map((t) => `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span><small class="block">${esc(roster.filter((p) => p.role === 'coach' && p.teamId === t.id).map((p) => p.email).join(', ') || 'no coach yet')}</small></span><span class="acts"><button class="btn ghost small" data-teamed="${esc(t.id)}" aria-label="Switch edition of ${esc(t.name)}">${teamEdition(t) === 'future' ? 'Make Founders' : 'Make Future'}</button><button class="btn ghost small" data-teampw="${esc(t.id)}" aria-label="Team password for ${esc(t.name)}">Password</button><button class="btn ghost small" data-rename="${esc(t.id)}" aria-label="Rename team ${esc(t.name)}">Rename</button><button class="btn ghost small danger" data-delteam="${esc(t.id)}" aria-label="Delete team ${esc(t.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No teams yet.</li>';
     const sel = $('#a-ut'); const cur = sel.value;
     sel.innerHTML = teams.map((t) => `<option value="${esc(t.id)}">${esc(t.number)} ${esc(t.name)}</option>`).join(''); sel.value = cur;
@@ -604,9 +613,9 @@ export function adminView(root, ctx) {
     const rosterHtml = rosterRows.length ? `<h3>Team rosters <small>(${rosterRows.length})</small></h3><ul class="admin-list">${rosterRows.map((r) => `<li><span><b>${esc(r.name || r.email.split('@')[0])}</b> <span class="badge ${r.role === 'coach' ? 'live-b' : ''}">${r.role === 'coach' ? 'Coach' : 'Member'}</span><small class="block">${esc(r.email)} · ${esc(teamName(r.teamId))}</small></span>
       <span class="acts"><button class="btn ghost small" data-setrole="${esc(r.id)}" data-role="${r.role === 'coach' ? 'member' : 'coach'}">${r.role === 'coach' ? 'Make member' : 'Make coach'}</button>
       <button class="btn ghost small danger" data-rmroster="${esc(r.id)}" aria-label="Remove ${esc(r.email)} from ${esc(teamName(r.teamId))}">Remove</button></span></li>`).join('')}</ul>` : '';
-    $('#a-users').innerHTML = grp('admin', 'Admins') + grp('host', 'Event hosts') + grp('judge', 'Judges & referees') + rosterHtml || '<p class="empty">Nobody listed.</p>';
+    $('#a-users').innerHTML = grp('admin', 'Admins') + grp('host', 'Event hosts') + grp('judge', 'Referees') + rosterHtml || '<p class="empty">Nobody listed.</p>';
     const sc = ctx.scores().slice().sort((a, b) => (a.eventId || '').localeCompare(b.eventId || '') || a.number - b.number || a.round - b.round);
-    $('#a-scores').innerHTML = sc.map((s) => `<tr><td>${esc(evName(s.eventId))}</td><td>#${esc(s.number)} ${esc(s.name)}</td><td>${s.round}</td><td class="num"><b>${s.total}</b></td><td>${esc(s.judgeName || '')}</td>
+    $('#a-scores').innerHTML = sc.map((s) => `<tr><td>${esc(evName(s.eventId))}</td><td>#${esc(s.number)} ${esc(s.name)}</td><td>${s.round}</td><td class="num"><b>${s.total}</b></td><td>${esc(s.judgeName || '—')}${s.judgeEmail ? `<small class="block">${esc(s.judgeEmail)}</small>` : ''}</td>
       <td class="acts"><button class="btn ghost small" data-sig="${esc(s.id)}">Signature</button><button class="btn ghost small danger" data-delscore="${esc(s.id)}" aria-label="Delete score for ${esc(s.name)} match ${s.round}">Delete</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">No scores yet.</td></tr>';
   }
   const run = async (fn) => { try { await fn(); } catch (x) { toast(x.message, 'err'); } };
@@ -655,7 +664,7 @@ export function adminView(root, ctx) {
     const name = $('#a-evn').value.trim(); if (!name) return;
     run(async () => {
       const first = ctx.events().length === 0;
-      await ctx.store.put('events', ctx.store.newId('e'), { name, date: $('#a-evd').value || '', live: first, editions: editionsOf($('#a-eved').value), createdAt: Date.now() });
+      await ctx.store.put('events', ctx.store.newId('e'), { name, date: $('#a-evd').value || '', live: first, ...eventKind($('#a-eved').value), teamIds: [], createdAt: Date.now() });
       e.target.reset(); toast(`Event “${name}” added`, 'ok');
     });
   });
@@ -706,11 +715,11 @@ export function adminView(root, ctx) {
   root.addEventListener('change', (e) => {
     const sel = e.target.closest('select[data-evedsel]'); if (!sel) return;
     const ev = ctx.events().find((x) => x.id === sel.dataset.evedsel); if (!ev) return;
-    const next = editionsOf(sel.value);
+    const kind = eventKind(sel.value), next = kind.editions;
     const dropped = eventEditions(ev).filter((x) => !next.includes(x));
     const hasScores = dropped.length && ctx.scores().some((sc) => sc.eventId === ev.id && dropped.includes(editionOf(sc)));
     if (hasScores && !confirm(`This event already has ${dropped.map((x) => EDITIONS[x].label).join(' / ')} scores. They stay saved but won’t show on the leaderboard while that edition is off. Change anyway?`)) { sel.value = editionChoice(ev); return; }
-    run(async () => { await ctx.store.patch('events', ev.id, { editions: next }); toast('Event editions updated', 'ok'); });
+    run(async () => { await ctx.store.patch('events', ev.id, kind); toast('Event editions updated', 'ok'); });
   });
   root.addEventListener('click', (e) => {
     const t = e.target.closest('button'); if (!t) return;
@@ -724,6 +733,7 @@ export function adminView(root, ctx) {
     if (d.setrole) run(async () => { await ctx.store.patch('roster', d.setrole, { role: d.role }); toast(d.role === 'coach' ? 'Now a coach of this team' : 'Now a team member', 'ok'); });
     if (d.rmroster && confirm('Remove this person from the team? (Their account and other teams stay.)')) run(() => ctx.store.remove('roster', d.rmroster));
     if (d.delev && confirm('Delete this event? Its scores stay in the database but no longer show on the dashboard.')) run(async () => { await ctx.store.remove('events', d.delev); if (ctx.eventHosts().some((h) => h.id === d.delev)) await ctx.store.remove('eventHosts', d.delev); });
+    if (d.evrename) { const cur = ctx.events().find((x) => x.id === d.evrename); const name = prompt('Event name', cur?.name || ''); if (name?.trim() && name.trim() !== cur?.name) run(async () => { await ctx.store.patch('events', d.evrename, { name: name.trim().slice(0, 80) }); toast('Event renamed', 'ok'); }); }
     if (d.evmanage) { try { localStorage.setItem(MANAGE_KEY, d.evmanage); } catch { /* ignore */ } ctx.go('#/event'); }
     if (d.evhosts) openHosts(d.evhosts);
     if (d.evlive) run(async () => { for (const ev of ctx.events()) if (!!ev.live !== (ev.id === d.evlive)) await ctx.store.patch('events', ev.id, { live: ev.id === d.evlive }); toast('Live event changed', 'ok'); });
@@ -734,9 +744,9 @@ export function adminView(root, ctx) {
   });
   $('#a-csv').addEventListener('click', () => {
     const cols = [...MISSIONS, ...FUTURE_MISSIONS];
-    const head = ['event', 'edition', 'team_number', 'team_name', 'match', 'total', 'gp', 'table', 'judge', 'initials', 'submitted_at', ...cols.map((m) => m.id)];
+    const head = ['event', 'edition', 'team_number', 'team_name', 'match', 'total', 'gp', 'table', 'referee', 'referee_email', 'submitted_at', ...cols.map((m) => m.id)];
     const rows = ctx.scores().slice().sort((a, b) => (a.eventId || '').localeCompare(b.eventId || '') || a.number - b.number || a.round - b.round).map((s) => [
-      evName(s.eventId), editionOf(s), s.number, s.name, s.round, s.total, s.gp, s.table, s.judgeName, s.initials, new Date(s.createdAt).toISOString(),
+      evName(s.eventId), editionOf(s), s.number, s.name, s.round, s.total, s.gp, s.table, s.judgeName, s.judgeEmail || '', new Date(s.createdAt).toISOString(),
       ...cols.map((m) => s.result.missions.find((x) => x.id === m.id)?.points ?? '')]);
     download('glowboard-scores.csv', [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\n'));
   });
@@ -754,7 +764,7 @@ function scheduleTableHTML(sched, teams, q = '') {
   const hit = (t) => q && t && `${t.number} ${t.name}`.toLowerCase().includes(q);
   return groupSchedule(sched.rows).map((g) => `
     <h3>Round ${g.round}</h3>
-    <div class="table-scroll"><table class="data sched"><thead><tr><th>Time</th>${Array.from({ length: T }, (_, i) => `<th>Table ${i + 1}</th>`).join('')}</tr></thead><tbody>
+    <div class="table-scroll"><table class="data sched"><thead><tr><th>Time</th>${Array.from({ length: T }, (_, i) => `<th>Table ${tableLabel(i + 1, T)}</th>`).join('')}</tr></thead><tbody>
       ${g.slots.map((sl) => `<tr><th scope="row">${esc(sl.time)}</th>${Array.from({ length: T }, (_, i) => {
         const t = byId[sl.tables[i + 1]];
         return `<td class="${hit(t) ? 'hit' : ''}">${t ? `<b>#${esc(t.number)}</b> ${esc(t.name)}` : '<span class="muted">—</span>'}</td>`;
@@ -764,25 +774,26 @@ function scheduleTableHTML(sched, teams, q = '') {
 
 export function scheduleView(root, ctx) {
   root.innerHTML = `<h1 class="page-title">Match schedule</h1>
-    <div class="toolbar"><label class="field evsel"><span class="sr">Event</span><select id="s-ev" aria-label="Event"></select></label>
-      <label class="search"><span class="sr">Find a team</span><input id="s-q" type="search" placeholder="Find a team or number…" autocomplete="off"></label></div>
+    <div class="toolbar"><div class="evchips" id="s-ev" role="radiogroup" aria-label="Event"></div>
+      <label class="search"><span class="sr">Find a team</span><input id="s-q" type="search" placeholder="Find a team or number…" autocomplete="off"></label><button type="button" class="btn" id="s-print">🖨️ Print schedule</button></div>
     <section class="card"><div id="s-mine"></div><div id="s-body"></div></section>`;
   const $ = (x) => root.querySelector(x);
   let q = '';
   $('#s-q').addEventListener('input', (e) => { q = e.target.value.trim().toLowerCase(); render(); });
-  $('#s-ev').addEventListener('change', (e) => { try { localStorage.setItem(EV_KEY, e.target.value); } catch { /* ignore */ } render(); });
+  $('#s-ev').addEventListener('click', (e) => { const b = e.target.closest('[data-ev]'); if (!b) return; try { localStorage.setItem(EV_KEY, b.dataset.ev); } catch { /* ignore */ } render(); });
+  $('#s-print').addEventListener('click', () => window.print());
   function render() {
     const events = ctx.events(), ev = pickEvent(events);
     const sel = $('#s-ev');
     sel.hidden = events.length < 2;
-    sel.innerHTML = events.slice().sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0)).map((e) => `<option value="${esc(e.id)}">${esc(e.name)}${e.live ? ' · live' : ''}</option>`).join('');
-    if (ev) sel.value = ev.id;
+    sel.innerHTML = evChips(events, ev?.id);
+    $('#s-print').hidden = !ev?.schedule?.rows?.length;
     const sched = ev?.schedule;
     if (!sched?.rows?.length) { $('#s-mine').innerHTML = ''; $('#s-body').innerHTML = `<p class="empty">${ev ? 'The schedule for this event hasn’t been published yet.' : 'No events yet.'}</p>`; return; }
     const teams = ctx.teams();
     const matches = q ? teams.filter((t) => `${t.number} ${t.name}`.toLowerCase().includes(q)) : [];
     $('#s-mine').innerHTML = matches.length === 1
-      ? `<p class="mine"><b>${esc(teamLabel(matches[0]))}</b> plays: ${sched.rows.filter((r) => r.teamId === matches[0].id).sort((a, b) => a.slot - b.slot).map((r) => `<span class="chip">R${r.round} · ${esc(r.time)} · table ${r.table}</span>`).join(' ')}</p>` : '';
+      ? `<p class="mine"><b>${esc(teamLabel(matches[0]))}</b> plays: ${sched.rows.filter((r) => r.teamId === matches[0].id).sort((a, b) => a.slot - b.slot).map((r) => `<span class="chip">R${r.round} · ${esc(r.time)} · table ${esc(r.table)}</span>`).join(' ')}</p>` : '';
     $('#s-body').innerHTML = `<p class="muted small">${esc(ev.name)} · ${sched.config.rounds} rounds · ${sched.config.tables} tables · ${sched.stats?.teams ?? ''} teams · finishes about ${esc(sched.stats?.endsAt || '')}</p>` + scheduleTableHTML(sched, teams, q);
   }
   render();
@@ -796,7 +807,7 @@ export function eventView(root, ctx) {
   if (!(u.role === 'admin' || u.host)) { root.innerHTML = '<section class="card narrow"><h1>Hosts only</h1><p class="muted">Event pages are for event hosts and admins.</p></section>'; return {}; }
   root.innerHTML = '<h1 class="page-title">Event</h1><div id="ev"></div>';
   const host = root.querySelector('#ev');
-  let selId = null, picks = null, pickKey = '', draft = null, seed = 1, cfgIn = null, people = [], refs = [], refsFor = '';
+  let selId = null, pickKey = '', editing = false, draft = null, seed = 1, cfgIn = null, people = [], refs = [], refsFor = '';
   try { selId = localStorage.getItem(MANAGE_KEY); } catch { /* ignore */ }
   const run = async (fn) => { try { await fn(); } catch (x) { toast(x.message, 'err'); } };
   const mine = () => hostedEvents(u, ctx.events(), ctx.eventHosts()).sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0));
@@ -809,27 +820,28 @@ export function eventView(root, ctx) {
     const list = mine(), ev = cur();
     if (!ev) { host.innerHTML = newEventForm(u) + `<section class="card narrow"><h2>No events yet</h2><p class="muted">${u.role === 'admin' ? 'Add one above.' : 'An admin needs to assign you to an event. Ask them to add your Google account under Events → Hosts.'}</p></section>`; return; }
     const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
-    if (pickKey !== ev.id) { picks = new Set(ev.teamIds || []); pickKey = ev.id; draft = null; cfgIn = null; seed = 1; }
+    if (pickKey !== ev.id) { pickKey = ev.id; draft = null; cfgIn = null; seed = 1; }
     if (refsFor !== ev.id) { refsFor = ev.id; refs = []; setTimeout(loadRefs, 0); }
     const cfg = cfgIn || ev.schedule?.config || SCHEDULE_DEFAULTS;
     const shown = draft || ev.schedule || null;
     const evTeams = eventTeams(ev, teams);
     host.innerHTML = `
       ${newEventForm(u)}
-      ${list.length > 1 ? `<label class="field evsel"><span>Event</span><select id="e-sel">${list.map((e) => `<option value="${esc(e.id)}" ${e.id === ev.id ? 'selected' : ''}>${esc(e.name)}${e.live ? ' · live' : ''}</option>`).join('')}</select></label>` : `<h2 class="evtitle">${esc(ev.name)}</h2>`}
-      <section class="card"><h2>Teams at this event <small id="e-teamcount">(${evTeams.length}${ev.teamIds?.length ? '' : ' · all teams'})</small></h2>
+      ${list.length > 1 ? `<div class="evchips" id="e-sel" role="radiogroup" aria-label="Event">${evChips(list, ev.id)}</div>` : ''}
+      <h2 class="evtitle">${esc(ev.name)}${ev.test ? ' <span class="badge">test event</span>' : ''} ${u.role === 'admin' ? '<button class="btn ghost small" id="e-rename" type="button">Rename</button>' : ''}</h2>
+      <section class="card"><h2>Teams at this event <small id="e-teamcount">(${evTeams.length})</small></h2>
+        <p class="muted small">Only the teams you add here play in this event. A team number that already exists is the same team — it is added, not copied.</p>
         <form id="e-team" class="grid-user" novalidate><label class="field"><span>Number <small>(required)</small></span><input id="e-tn" inputmode="numeric" pattern="[0-9]*" maxlength="6" required></label>
-          <label class="field"><span>Team name <small>(required)</small></span><input id="e-tname" maxlength="60" required></label>
-          ${eventEditions(ev).length > 1 ? `<label class="field"><span>Edition</span><select id="e-ted">${editionOptions(eventEditions(ev), eventEditions(ev)[0])}</select></label>` : ''}
-          <label class="field"><span>Designated coach’s Google email</span><input id="e-tcoach" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label><button class="btn primary">Add team</button></form>
-        <p class="muted small">Each new team gets a team password.</p>
+          <label class="field"><span>Team name <small>(new teams)</small></span><input id="e-tname" maxlength="60"></label>
+          ${eventEditions(ev).length > 1 ? `<label class="field"><span>Edition <small>(new teams)</small></span><select id="e-ted">${editionOptions(eventEditions(ev), eventEditions(ev)[0])}</select></label>` : ''}
+          <label class="field"><span>Designated coach’s Google email <small>(new teams)</small></span><input id="e-tcoach" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off"></label><button class="btn primary">Add team</button></form>
         <div id="e-terr" class="error" role="alert" hidden></div>
-        <details class="bulk"><summary>Bulk add (paste “number, name, coach@gmail.com” per line — coach optional)</summary><textarea id="e-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers, coach@gmail.com&#10;5530, Byte Me"></textarea><button class="btn ghost" id="e-bulkgo" type="button">Add all</button></details>
-        <p class="muted small">Tick the teams at this event. None ticked = all teams.</p>
-        <div class="row-actions"><button class="btn ghost small" id="e-all" type="button">Tick all</button><button class="btn ghost small" id="e-none" type="button">Clear</button></div>
-        <div class="checklist" id="e-checks">${checksHTML(teams)}</div>
-        <button class="btn primary" id="e-saveteams" type="button">Save teams</button></section>
-      <section class="card"><h2>Referees &amp; judges</h2>
+        <details class="bulk" open><summary>Bulk add (paste “number, name, coach@gmail.com” per line — coach optional)</summary><textarea id="e-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers, coach@gmail.com&#10;5530, Byte Me"></textarea><button class="btn ghost" id="e-bulkgo" type="button">Add all</button></details>
+        ${Array.isArray(ev.teamIds) ? '' : '<p class="muted small">This is an older event that still shows every team. Adding a team (or this button) switches it to a team list you control. <button class="btn ghost small" id="e-legacy" type="button">Switch to a team list</button></p>'}
+        <ul class="admin-list" id="e-teamlist">${teamListHTML(ev, evTeams)}</ul></section>
+      ${ev.test ? `<section class="card"><h2>Test tools</h2><p class="muted small">This is a test event: make teams and scores without scoring by hand.</p>
+        <div class="row-actions"><button class="btn" id="t-teams" type="button">Add 12 demo teams</button><button class="btn" id="t-scores" type="button">Generate random scores</button><button class="btn ghost danger" id="t-clear" type="button">Clear all scores</button></div></section>` : ''}
+      <section class="card"><h2>Referees</h2>
         <p class="muted small">Referees can enter scores for this event.</p>
         <form id="e-ref" class="grid-user" novalidate><label class="field"><span>Google email</span><input id="r-email" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label>
           <label class="field"><span>Name <small>(optional)</small></span><input id="r-name" maxlength="40"></label><button class="btn primary">Add referee</button></form>
@@ -849,19 +861,21 @@ export function eventView(root, ctx) {
         <p class="muted small">Delete a score so the match can be scored again.</p>
         <ul class="admin-list" id="e-scores">${scoresHTML(ev)}</ul></section>`;
   }
-  const checksHTML = (teams) => teams.map((t) => `<div class="checkrow"><label class="check"><input type="checkbox" data-tid="${esc(t.id)}" ${picks.has(t.id) ? 'checked' : ''}> <span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span></span></label></div>`).join('') || '<p class="empty">No teams yet — add one above.</p>';
+  const teamListHTML = (ev, evTeams) => evTeams.slice().sort((a, b) => a.number - b.number).map((t) => `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span></span>${Array.isArray(ev.teamIds) ? `<button class="btn ghost small danger" data-rmteam="${esc(t.id)}" aria-label="Remove team ${esc(t.number)} from this event">Remove</button>` : ''}</li>`).join('') || '<li class="empty">No teams yet — add some above.</li>';
+  // An older event with no team list keeps the teams it shows today when its first team is added.
+  const addToEvent = async (ev, ids) => { const base = Array.isArray(ev.teamIds) ? ev.teamIds : eventTeams(ev, ctx.teams()).map((t) => t.id); await ctx.store.patch('events', ev.id, { teamIds: [...new Set([...base, ...ids])] }); };
   // Refresh just the lists (not the forms), so typing / Enter-to-submit never loses focus or half-typed input.
   function refreshLists() {
     const ev = cur(); if (!ev) return;
     const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
-    const c = host.querySelector('#e-checks'); if (c) c.innerHTML = checksHTML(teams);
+    const c = host.querySelector('#e-teamlist'); if (c) c.innerHTML = teamListHTML(ev, eventTeams(ev, teams));
     const r = host.querySelector('#e-reflist'); if (r) r.innerHTML = refsHTML();
     const sl = host.querySelector('#e-scores'); if (sl) sl.innerHTML = scoresHTML(ev);
-    const h = host.querySelector('#e-teamcount'); if (h) { const n = eventTeams(ev, ctx.teams()).length; h.textContent = `(${n}${ev.teamIds?.length ? '' : ' · all teams'})`; }
+    const h = host.querySelector('#e-teamcount'); if (h) h.textContent = `(${eventTeams(ev, ctx.teams()).length})`;
   }
   function scoresHTML(ev) {
     const rows = ctx.scores().filter((x) => x.eventId === ev.id).sort((x, y) => x.number - y.number || x.round - y.round);
-    return rows.map((x) => `<li><span><b>#${esc(x.number)} ${esc(x.name)}</b> · match ${x.round} · <b>${x.total}</b> pts<small class="block">${x.table ? `table ${esc(x.table)} · ` : ''}${esc(x.judgeName || '')}</small></span>
+    return rows.map((x) => `<li><span><b>#${esc(x.number)} ${esc(x.name)}</b> · match ${x.round} · <b>${x.total}</b> pts<small class="block">${x.table ? `table ${esc(x.table)} · ` : ''}Refereed by ${esc(x.judgeName || 'unknown')}${x.judgeEmail ? ` (${esc(x.judgeEmail)})` : ''}</small></span>
       <button class="btn ghost small danger" data-delscore="${esc(x.id)}" aria-label="Delete score for ${esc(x.name)} match ${x.round}">Delete</button></li>`).join('') || '<li class="empty">No scores yet.</li>';
   }
   function refsHTML() {
@@ -869,24 +883,41 @@ export function eventView(root, ctx) {
       <button class="btn ghost small danger" data-rmref="${esc(email)}" aria-label="Remove referee ${esc(email)}">Remove</button></li>`; }).join('') || '<li class="empty">No referees added for this event yet.</li>';
   }
   async function loadRefs() { const ev = cur(); if (!ev) return; try { refs = (await ctx.store.get('eventJudges', ev.id))?.emails || []; } catch { refs = []; } const l = host.querySelector('#e-reflist'); if (l) l.innerHTML = refsHTML(); }
+  function editorHTML(sch, evTeams) {
+    const T = sch.config.tables, opts = (sel) => `<option value="">—</option>${evTeams.slice().sort((a, b) => a.number - b.number).map((t) => `<option value="${esc(t.id)}" ${t.id === sel ? 'selected' : ''}>#${esc(t.number)} ${esc(t.name)}</option>`).join('')}`;
+    return groupSchedule(sch.rows).map((g) => `<h3>Round ${g.round}</h3><div class="table-scroll"><table class="data sched"><thead><tr><th>Time</th>${Array.from({ length: T }, (_, i) => `<th>Table ${tableLabel(i + 1, T)}</th>`).join('')}</tr></thead><tbody>
+      ${g.slots.map((sl) => `<tr><th scope="row">${esc(sl.time)}</th>${Array.from({ length: T }, (_, i) => `<td><select data-cell="${sl.slot}|${i + 1}" aria-label="Round ${g.round} ${esc(sl.time)} table ${tableLabel(i + 1, T)}">${opts(sl.tables[i + 1])}</select></td>`).join('')}</tr>`).join('')}</tbody></table></div>`).join('');
+  }
   function schedBlock(sch, ev, evTeams) {
     const st = sch.stats || {};
     const warn = st.minGap != null && st.minGap < 2 && st.slotsPerRound >= 2;
-    return `<div class="sched-meta"><b>${draft ? 'Preview (not saved)' : 'Saved schedule'}</b> · ${st.teams} teams · ${st.slotsPerRound} slot${st.slotsPerRound === 1 ? '' : 's'} per round · ${sch.config.rounds} rounds · ends about ${esc(st.endsAt || '')}
+    const issues = editing ? scheduleIssues(sch.rows, sch.config) : [];
+    return `<div class="sched-meta"><b>${draft ? 'Preview (not published)' : 'Published schedule'}</b> · ${st.teams} teams · ${st.slotsPerRound} slot${st.slotsPerRound === 1 ? '' : 's'} per round · ${sch.config.rounds} rounds · ends about ${esc(st.endsAt || '')}
         ${st.minGap != null && Number.isFinite(st.minGap) ? ` · shortest rest between a team’s matches: ${st.minGap - 1} slot${st.minGap - 1 === 1 ? '' : 's'}` : ''}${warn ? ' <span class="badge warnb">tight</span>' : ''}</div>
       <div class="row-actions">
-        ${draft ? '<button class="btn primary" id="e-save" type="button">Save schedule</button>' : ''}
+        ${draft ? '<button class="btn primary" id="e-save" type="button">Publish schedule</button>' : ''}
+        <button class="btn ${editing ? 'primary' : 'ghost'}" id="e-edit" type="button">${editing ? 'Done editing' : '✏️ Edit by hand'}</button>
+        <button class="btn ghost" id="e-print" type="button">🖨️ Print</button>
         <button class="btn ghost" id="e-csv" type="button">Download CSV</button>
         <button class="btn ghost" id="e-copy" type="button">Copy for Google Sheets</button>
-        ${!draft && ev.schedule ? '<button class="btn ghost danger" id="e-clear" type="button">Delete saved schedule</button>' : ''}</div>
-      ${scheduleTableHTML(sch, evTeams)}`;
+        ${!draft && ev.schedule ? '<button class="btn ghost danger" id="e-clear" type="button">Unpublish schedule</button>' : ''}</div>
+      ${editing ? `<p class="muted small">Pick a team for any time and table. Changes are a preview until you press Publish schedule.</p>${issues.length ? `<ul class="issues">${issues.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : '<p class="muted small">✓ Every team plays each round once.</p>'}${editorHTML(sch, evTeams)}` : scheduleTableHTML(sch, evTeams)}`;
   }
   const readCfg = () => clampConfig({ rounds: root.querySelector('#c-rounds').value, tables: root.querySelector('#c-tables').value, start: root.querySelector('#c-start').value, interval: root.querySelector('#c-interval').value, breakMin: root.querySelector('#c-break').value });
   const exportTable = () => { const ev = cur(); return scheduleTable(draft || ev.schedule, eventTeams(ev, ctx.teams()), ev.name); };
 
+
   host.addEventListener('change', (e) => {
-    if (e.target.id === 'e-sel') { selId = e.target.value; try { localStorage.setItem(MANAGE_KEY, selId); } catch { /* ignore */ } pickKey = ''; draw(); }
-    if (e.target.dataset?.tid) { e.target.checked ? picks.add(e.target.dataset.tid) : picks.delete(e.target.dataset.tid); }
+    const c = e.target.dataset?.cell; if (!c || !draft) return;
+    const [slot, tableNo] = c.split('|').map(Number), T = draft.config.tables;
+    const row = draft.rows.find((r) => r.slot === slot && r.tableNo === tableNo);
+    const sib = draft.rows.find((r) => r.slot === slot);
+    if (!e.target.value) draft.rows = draft.rows.filter((r) => r !== row);
+    else if (row) row.teamId = e.target.value;
+    else if (sib) draft.rows.push({ round: sib.round, slot, time: sib.time, table: tableLabel(tableNo, T), tableNo, teamId: e.target.value });
+    draft.rows.sort((a, b) => a.slot - b.slot || a.tableNo - b.tableNo);
+    draft.stats = restat(draft.rows, draft.config);
+    const box = host.querySelector('#e-sched'); const ev = cur(); if (box) box.innerHTML = schedBlock(draft, ev, eventTeams(ev, ctx.teams()));
   });
   host.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -895,7 +926,7 @@ export function eventView(root, ctx) {
       const name = host.querySelector('#e-nevn').value.trim(); if (!name) return;
       run(async () => {
         const id = ctx.store.newId('e');
-        await ctx.store.put('events', id, { name, date: host.querySelector('#e-nevd').value || '', live: ctx.events().length === 0, editions: editionsOf(host.querySelector('#e-neved').value), createdAt: Date.now() });
+        await ctx.store.put('events', id, { name, date: host.querySelector('#e-nevd').value || '', live: ctx.events().length === 0, ...eventKind(host.querySelector('#e-neved').value), teamIds: [], createdAt: Date.now() });
         selId = id; pickKey = ''; try { localStorage.setItem(MANAGE_KEY, id); } catch { /* ignore */ }
         toast(`Event “${name}” added`, 'ok'); draw();
       });
@@ -906,13 +937,15 @@ export function eventView(root, ctx) {
       const number = parseInt(host.querySelector('#e-tn').value, 10), name = host.querySelector('#e-tname').value.trim(), coachEmail = normEmail(host.querySelector('#e-tcoach').value);
       const bad = (m) => { er.hidden = false; er.textContent = m; };
       if (!(number > 0)) return bad('A team number is required.');
-      if (!name) return bad('A team name is required.');
+      const existing = ctx.teams().find((t) => t.number === number);
+      if (existing) { // the number IS the team: reuse it, whatever name or coach is typed
+        return run(async () => { await addToEvent(ev, [existing.id]); e.target.reset(); toast(`Team #${number} ${existing.name} added to ${ev.name}`, 'ok'); });
+      }
+      if (!name) return bad('A team name is required for a new team.');
       if (!EMAIL_RE.test(coachEmail)) return bad('Enter the designated coach’s Google email address.');
-      if (ctx.teams().some((t) => t.number === number)) return bad(`Team #${number} already exists — tick it below instead.`);
       run(async () => {
         const res = await createTeam(ctx.store, u, { number, name, coachEmail, edition: host.querySelector('#e-ted')?.value || eventEditions(ev)[0] });
-        picks.add(res.id);
-        if (ev.teamIds?.length) await ctx.store.patch('events', ev.id, { teamIds: [...new Set([...ev.teamIds, res.id])] });
+        await addToEvent(ev, [res.id]);
         e.target.reset(); host.querySelector('#e-tn').focus(); showTeamCreated(res, false);
       });
     }
@@ -934,7 +967,7 @@ export function eventView(root, ctx) {
       cfgIn = readCfg();
       const ids = eventTeams(ev, ctx.teams()).map((t) => t.id);
       if (!ids.length) return toast('Add or tick some teams first.', 'err');
-      seed = draft ? seed + 1 : seed;
+      seed = Math.floor(Math.random() * 1e9) + 1; editing = false; // a fresh random shuffle every time
       draft = generateSchedule(ids, cfgIn, seed);
       draw();
     }
@@ -951,25 +984,60 @@ export function eventView(root, ctx) {
       if (p?.role === 'judge' && p.eventIds?.length === 1 && p.eventIds[0] === ev.id) { try { await ctx.store.remove('access', email); } catch { /* not allowed / already gone */ } }
       loadRefs();
     });
-    if (b.id === 'e-all') { picks = new Set(ctx.teams().map((t) => t.id)); host.querySelectorAll('[data-tid]').forEach((c) => { c.checked = true; }); }
-    if (b.id === 'e-none') { picks = new Set(); host.querySelectorAll('[data-tid]').forEach((c) => { c.checked = false; }); }
-    if (b.id === 'e-saveteams') run(async () => { await ctx.store.patch('events', ev.id, { teamIds: [...picks] }); draft = null; draw(); toast(picks.size ? `${picks.size} teams saved` : 'All teams included', 'ok'); });
+    if (b.closest('#e-sel') && b.dataset.ev) { selId = b.dataset.ev; try { localStorage.setItem(MANAGE_KEY, selId); } catch { /* ignore */ } pickKey = ''; draw(); return; }
+    if (b.id === 'e-rename') { const name = prompt('Event name', ev.name); if (name?.trim() && name.trim() !== ev.name) run(async () => { await ctx.store.patch('events', ev.id, { name: name.trim().slice(0, 80) }); toast('Event renamed', 'ok'); draw(); }); }
+    if (b.dataset.rmteam) run(async () => { await ctx.store.patch('events', ev.id, { teamIds: (ev.teamIds || []).filter((x) => x !== b.dataset.rmteam) }); draft = null; draw(); });
+    if (b.id === 'e-legacy') run(async () => { await ctx.store.patch('events', ev.id, { teamIds: eventTeams(ev, ctx.teams()).map((t) => t.id) }); draw(); });
     if (b.id === 'e-bulkgo') run(async () => {
       const lines = host.querySelector('#e-bulk').value.split('\n').map((l) => l.trim()).filter(Boolean);
-      const made = [];
+      const made = [], joined = [], seen = new Set();
       for (const l of lines) {
-        const m = l.match(/^(\d{1,6})\s*[,\t]\s*([^,\t]+?)\s*(?:[,\t]\s*(\S+@\S+))?$/); if (!m || !+m[1]) continue;
-        if (ctx.teams().some((t) => t.number === +m[1]) || made.some((r) => r.number === +m[1])) continue;
+        const m = l.match(/^(\d{1,6})\s*(?:[,\t]\s*([^,\t]*?)\s*(?:[,\t]\s*(\S+@\S+))?)?$/); if (!m || !+m[1] || seen.has(+m[1])) continue;
+        seen.add(+m[1]);
+        const existing = ctx.teams().find((t) => t.number === +m[1]);
+        if (existing) { joined.push(existing.id); continue; } // same number = same team
+        if (!m[2]) continue; // a new team needs a name
         made.push(await createTeam(ctx.store, u, { number: +m[1], name: m[2].trim(), coachEmail: m[3] || '', edition: host.querySelector('#e-ted')?.value || eventEditions(ev)[0] }));
       }
-      made.forEach((r) => picks.add(r.id));
-      if (ev.teamIds?.length && made.length) await ctx.store.patch('events', ev.id, { teamIds: [...new Set([...ev.teamIds, ...made.map((r) => r.id)])] });
+      const ids = [...joined, ...made.map((r) => r.id)];
+      if (ids.length) await addToEvent(ev, ids);
       host.querySelector('#e-bulk').value = '';
-      if (made.length) modal(`<p>${made.length} team${made.length === 1 ? '' : 's'} added. Team passwords:</p><div class="table-scroll"><table class="data"><thead><tr><th>Team</th><th>Password</th><th>Coach</th></tr></thead><tbody>${made.map((r) => `<tr><td>#${esc(r.number)} ${esc(r.name)}</td><td><code>${esc(r.password)}</code></td><td>${esc(r.coach === 'added' ? r.coachEmail : r.coach === 'none' ? '—' : `${r.coachEmail} (not changed)`)}</td></tr>`).join('')}</tbody></table></div>`, { title: 'Teams created' }); else toast('No new teams to add', 'err');
+      if (made.length) modal(`<p>${made.length} new team${made.length === 1 ? '' : 's'} created${joined.length ? `; ${joined.length} existing team${joined.length === 1 ? '' : 's'} added by number` : ''}. Team passwords:</p><div class="table-scroll"><table class="data"><thead><tr><th>Team</th><th>Password</th><th>Coach</th></tr></thead><tbody>${made.map((r) => `<tr><td>#${esc(r.number)} ${esc(r.name)}</td><td><code>${esc(r.password)}</code></td><td>${esc(r.coach === 'added' ? r.coachEmail : r.coach === 'none' ? '—' : `${r.coachEmail} (not changed)`)}</td></tr>`).join('')}</tbody></table></div>`, { title: 'Teams created' });
+      else if (joined.length) toast(`${joined.length} existing team${joined.length === 1 ? '' : 's'} added by number`, 'ok'); else toast('No teams to add — each line needs a number (and a name for a new team)', 'err');
     });
     if (b.dataset.delscore && confirm('Delete this official score? The match can then be scored again.')) run(async () => { await ctx.store.remove('scores', b.dataset.delscore); toast('Score deleted', 'ok'); });
-    if (b.id === 'e-save') run(async () => { await ctx.store.patch('events', ev.id, { schedule: { ...draft, generatedAt: Date.now(), generatedBy: u.email } }); draft = null; draw(); toast('Schedule saved — it’s now public on the Schedule page', 'ok'); });
-    if (b.id === 'e-clear' && confirm('Delete the saved schedule?')) run(async () => { await ctx.store.patch('events', ev.id, { schedule: null }); draw(); });
+    if (b.id === 'e-edit') {
+      if (!editing) { draft = draft || JSON.parse(JSON.stringify(ev.schedule)); editing = true; } else editing = false;
+      draw(); return;
+    }
+    if (b.id === 'e-print') { document.body.classList.add('print-sched'); window.print(); setTimeout(() => document.body.classList.remove('print-sched'), 500); }
+    if (b.id === 't-teams') run(async () => {
+      const ids = [];
+      for (let i = 1; i <= 12; i++) {
+        const number = 9000 + i, ed = eventEditions(ev)[i % eventEditions(ev).length];
+        const ex = ctx.teams().find((t) => t.number === number);
+        ids.push(ex ? ex.id : (await createTeam(ctx.store, u, { number, name: `Test Team ${i}`, coachEmail: '', edition: ed })).id);
+      }
+      await addToEvent(ev, ids); toast('12 demo teams added', 'ok');
+    });
+    if (b.id === 't-scores') run(async () => {
+      const rand = Math.random, made = [];
+      const existing = new Set(ctx.scores().filter((x) => x.eventId === ev.id).map((x) => x.id));
+      for (const t of eventTeams(ev, ctx.teams())) {
+        const ed = teamEdition(t), skill = 0.25 + rand() * 0.6;
+        for (let round = 1; round <= MATCHES_PER_TEAM; round++) {
+          if (existing.has(scoreId(ev.id, t.id, round))) continue;
+          const res = scoreAll(randomState(ed, rand, Math.min(0.95, skill + (rand() - 0.5) * 0.2)), ed);
+          const row = ev.schedule?.rows?.find((r) => r.teamId === t.id && r.round === round);
+          await ctx.store.submitScore({ eventId: ev.id, eventName: ev.name, teamId: t.id, number: t.number, name: t.name, round, total: res.total, gp: res.gp, edition: ed, state: res.state, result: slim(res), judgeUid: u.uid, judgeName: `${u.name} (test)`, judgeEmail: u.email || '', table: row ? String(row.table) : '', createdAt: Date.now() }, TEST_SIGNATURE);
+          made.push(1);
+        }
+      }
+      toast(made.length ? `${made.length} random scores generated` : 'Every match already has a score', 'ok');
+    });
+    if (b.id === 't-clear' && confirm('Delete every score in this test event?')) run(async () => { for (const x of ctx.scores().filter((y) => y.eventId === ev.id)) await ctx.store.remove('scores', x.id); toast('Scores cleared', 'ok'); });
+    if (b.id === 'e-save') run(async () => { await ctx.store.patch('events', ev.id, { schedule: { ...draft, generatedAt: Date.now(), generatedBy: u.email } }); draft = null; editing = false; draw(); toast('Schedule published — it’s now on the Schedule page', 'ok'); });
+    if (b.id === 'e-clear' && confirm('Unpublish the schedule? It will disappear from the Schedule page.')) run(async () => { await ctx.store.patch('events', ev.id, { schedule: null }); draw(); });
     if (b.id === 'e-csv') downloadCSV(`${ev.name.replace(/\W+/g, '-').toLowerCase()}-schedule.csv`, exportTable());
     if (b.id === 'e-copy') run(async () => { toast((await copyForSheets(exportTable())) ? 'Copied — paste into Google Sheets (Ctrl+V)' : 'Couldn’t copy; use the CSV download', 'ok'); });
   });

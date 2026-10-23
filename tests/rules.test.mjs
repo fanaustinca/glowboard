@@ -53,7 +53,7 @@ test('referee is a per-event modifier: eventJudges list (admin/host-of-event wri
 });
 test('events: admins create/delete; a host may change ONLY teamIds + schedule of events they host', () => {
   const b = block('events');
-  assert.deepEqual(allow(b, 'create'), ["isAdmin() && validEditions(request.resource.data.get('editions', ['founders']))"]); assert.deepEqual(allow(b, 'delete'), ['isAdmin()']); assert.ok(!/isJudgeFor\(resource/.test(allow(b, 'update')[0] + allow(b, 'delete')[0]), 'judges can never replace or delete');
+  assert.deepEqual(allow(b, 'create'), ["isAdmin() && validEditions(request.resource.data.get('editions', ['founders'])) && request.resource.data.get('test', false) is bool"]); assert.deepEqual(allow(b, 'delete'), ['isAdmin()']); assert.ok(!/isJudgeFor\(resource/.test(allow(b, 'update')[0] + allow(b, 'delete')[0]), 'judges can never replace or delete');
   const upd = allow(b, 'update')[0];
   assert.match(upd, /isHostOf\(eventId\)/); assert.match(upd, /affectedKeys\(\)\.hasOnly\(\['teamIds', 'schedule'\]\)/);
 });
@@ -108,7 +108,7 @@ test('host is a modifier: host flag or host role; isHostOf only needs the per-ev
   assert.match(code, /function isHostAny\(\)[\s\S]*?myRole\(\) == 'host' \|\| myDoc\(\)\.data\.get\('host', false\) == true/);
   assert.match(code, /function isHostOf\(eventId\)[\s\S]*?eventHosts\/\$\(eventId\)/);
   assert.ok(!/function isHostOf[^}]*myRole\(\) == 'host'/.test(code), 'a coach/judge who is listed on an event is a host of it');
-  assert.match(code, /function isJudgeFor\(eventId\)[\s\S]*?get\('eventIds', null\) == null \|\| eventId in myDoc\(\)\.data\.eventIds/);
+  assert.match(code, /function isJudgeFor\(eventId\)[\s\S]*?get\('eventIds', \[\]\) is list && eventId in myDoc\(\)\.data\.get\('eventIds', \[\]\)/);
 });
 test('hosts add referees: judge role only, exactly ONE event they host, no extra fields, can’t overwrite; coaches can’t smuggle host/eventIds', () => {
   const b = block('access'); const create = allow(b, 'create')[0];

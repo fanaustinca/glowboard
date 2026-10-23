@@ -16,8 +16,8 @@ test('every team plays exactly `rounds` matches; ≤ tables per slot; no team tw
     const slotTeams = {}; const slotTables = {};
     for (const r of s.rows) {
       per[r.teamId] = (per[r.teamId] || 0) + 1;
-      (slotTeams[r.slot] ||= []).push(r.teamId); (slotTables[r.slot] ||= []).push(r.table);
-      assert.ok(r.table >= 1 && r.table <= T, `table in range (N=${N},T=${T})`);
+      (slotTeams[r.slot] ||= []).push(r.teamId); (slotTables[r.slot] ||= []).push(r.tableNo);
+      assert.ok(r.tableNo >= 1 && r.tableNo <= T, `table in range (N=${N},T=${T})`);
     }
     assert.equal(Object.keys(per).length, N, `all ${N} teams scheduled`);
     for (const id of Object.keys(per)) assert.equal(per[id], R, `${id} plays ${R} (N=${N},T=${T},R=${R})`);
@@ -75,3 +75,16 @@ test('grouping and exports: CSV quoting, TSV for Google Sheets paste', () => {
   assert.match(toCSV(table), /"Alpha, ""Prime"""/); assert.ok(toTSV(table).split('\n')[1].split('\t').length === 6);
 });
 console.log(`\n${passed} schedule checks passed`);
+{
+  const { generateSchedule: gen, tableLabel } = await import('../js/schedule.js');
+  const two = gen(['a', 'b', 'c', 'd'], { tables: 2, rounds: 3 }, 1);
+  assert.deepEqual([...new Set(two.rows.map((r) => r.table))].sort(), ['A', 'B'], 'two tables are called A and B');
+  assert.equal(tableLabel(3, 4), '3');
+  // teams do not meet the same opponents every round
+  const ids = Array.from({ length: 12 }, (_, i) => `t${i}`);
+  const s = gen(ids, { tables: 4, rounds: 3 }, 5);
+  const groups = [1, 2, 3].map((r) => { const by = {}; s.rows.filter((x) => x.round === r).forEach((x) => (by[x.slot] ||= []).push(x.teamId)); return Object.values(by).map((g) => g.sort().join()); });
+  assert.ok(groups[1].some((g) => !groups[0].includes(g)) && groups[2].some((g) => !groups[0].includes(g)), 'groups are re-dealt each round');
+  assert.equal(s.stats.tableRepeats <= 2, true, `table repeats stay low (${s.stats.tableRepeats})`);
+  console.log('schedule: A/B tables and mixed opponents ok');
+}

@@ -1,8 +1,8 @@
-// The scoring form, shared by the Judge page (official) and the Practice page (team).
+// The scoring form, shared by the Referee page (official) and the Practice page (team).
 import { TOKEN_POINTS, MAX_TOKENS, EQUIPMENT_INSPECTION_POINTS, GP_LEVELS, MATCHES_PER_TEAM, EDITIONS, EDITION_IDS, FUTURE_PENALTIES } from './missions.js';
 import { defaultState, normalizeMission, normalizeState, scoreAll, maxScores, missionsOf, editionOf } from './scoring.js';
 import { SigPad } from './sigpad.js';
-import { slim, initials as makeInitials, eventTeams, eventEditions, teamEdition } from './store.js';
+import { slim, eventTeams, eventEditions, teamEdition } from './store.js';
 import { esc, toast } from './ui.js';
 
 const sign = (n) => (n > 0 ? `+${n}` : `${n}`);
@@ -21,7 +21,7 @@ function fieldHTML(m, f) {
       ${f.max >= 10 ? `<span class="slidr"><input type="range" min="0" max="${f.max}" value="0" data-act="range" aria-label="${esc(f.label)}"><input type="number" inputmode="numeric" min="0" max="${f.max}" value="0" data-act="num" aria-label="${esc(f.label)} (type a number)"></span>` : ''}
       <span class="stepper"><button type="button" data-act="dec" aria-label="Fewer: ${esc(f.label)}">−</button><output aria-live="polite">0</output><button type="button" data-act="inc" aria-label="More: ${esc(f.label)}">+</button></span></div>`;
   }
-  const opts = f.options.map((o, i) => `<button type="button" role="radio" aria-checked="false" data-i="${i}">${esc(o.label)}${o.tag ? `<small>${esc(o.tag)}</small>` : o.pts ? `<small>${sign(o.pts)}</small>` : ''}</button>`).join('');
+  const opts = f.options.map((o, i) => o.hidden ? '' : `<button type="button" role="radio" aria-checked="false" data-i="${i}">${esc(o.label)}${o.tag ? `<small>${esc(o.tag)}</small>` : o.pts ? `<small>${sign(o.pts)}</small>` : ''}</button>`).join('');
   return `<div class="opt segf" ${base}><span class="lbl">${esc(f.label)}</span><div class="seg" role="radiogroup" aria-label="${esc(f.label)}">${opts}</div></div>`;
 }
 
@@ -67,7 +67,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   const curEvent = () => events().find((e) => e.id === eventId);
   const defaultEvent = () => (events().find((e) => e.live) || events().slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || {}).id || '';
   const eventOptions = () => events().slice().sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0))
-    .map((e) => `<option value="${esc(e.id)}">${esc(e.name)}${e.live ? ' (live)' : ''}</option>`).join('');
+    .map((e) => `<button type="button" role="radio" aria-checked="${e.id === eventId}" data-ev="${esc(e.id)}">${esc(e.name)}${e.live ? ' <small>live</small>' : ''}${e.test ? ' <small>test</small>' : ''}</button>`).join('');
   const teamOptions = () => eventTeams(curEvent(), teams()).filter((t) => teamEdition(t) === edition).slice().sort((a, b) => a.number - b.number)
     .map((t) => `<option value="${esc(t.id)}">${t.number} — ${esc(t.name)}</option>`).join('');
 
@@ -128,11 +128,11 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   root.innerHTML = `
   <div class="scorer ${official ? 'official' : tool ? 'practice tool' : 'practice'}">
     <section class="card setup">
-      <h2>${official ? 'Match details' : tool ? 'Scoring tool' : 'Practice run'}</h2>
+      <div class="setup-h"><h2>${official ? 'Match details' : tool ? 'Scoring tool' : 'Practice run'}</h2><button type="button" class="btn small" id="sc-full" aria-label="Full screen">⛶ Full screen</button></div>
       <div class="edsel"><span class="lbl">Scoring edition</span><div class="seg" role="radiogroup" aria-label="Scoring edition" id="sc-ed" ${editRun ? 'hidden' : ''}>${edButtons()}</div></div>
       <div class="grid-setup">
         ${official ? `
-        <label class="field"><span>Event</span><select id="sc-event" required>${eventOptions()}</select></label>
+        <div class="field"><span>Event <small>(only the events you were added to)</small></span><div class="evchips" id="sc-event" role="radiogroup" aria-label="Event">${eventOptions()}</div></div>
         <label class="field"><span>Team</span><select id="sc-team" required><option value="">Select a team…</option>${teamOptions()}</select></label>
         <label class="field"><span>Match</span><select id="sc-round">${Array.from({ length: MATCHES_PER_TEAM }, (_, i) => `<option value="${i + 1}">Official match ${i + 1}</option>`).join('')}</select></label>
         <label class="field"><span>Table</span><input id="sc-table" inputmode="text" maxlength="12" placeholder="e.g. 3" autocomplete="off"></label>` : `
@@ -148,7 +148,6 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     <section class="card sign" aria-labelledby="sg-h">
       <h2 id="sg-h">Team signature</h2>
       <p class="muted">Team and referee sign to confirm the score.</p>
-      <label class="field"><span>Team initials</span><input id="sc-initials" maxlength="6" autocomplete="off" autocapitalize="characters" placeholder="e.g. RR"></label>
       <div class="field"><span>Sign below</span>
         <div class="sigwrap"><canvas id="sc-sig" aria-label="Team signature pad. Draw with a finger, stylus or mouse."></canvas><span class="sighint" id="sc-sighint">Sign here</span></div>
         <button type="button" class="btn ghost small" id="sc-sigclear">Clear signature</button></div>
@@ -302,15 +301,16 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     const f = fieldDef(mid, k);
     if (f.type === 'check') mutate((s) => { s.m[mid][k] = !s.m[mid][k]; });
     else if (f.type === 'count') mutate((s) => { s.m[mid][k] += b.dataset.act === 'inc' ? 1 : -1; });
-    else if (f.type === 'seg') mutate((s) => { s.m[mid][k] = f.options[+b.dataset.i].v; });
+    else if (f.type === 'seg') mutate((s) => { const v = f.options[+b.dataset.i].v; s.m[mid][k] = s.m[mid][k] === v && f.options.some((o) => o.hidden) ? f.def : v; });
   });
+  $('#sc-full').addEventListener('click', () => { if (document.fullscreenElement) document.exitFullscreen?.(); else document.documentElement.requestFullscreen?.().catch(() => {}); });
   if (official) {
     if (!events().some((e) => e.id === eventId)) eventId = defaultEvent();
-    $('#sc-event').value = eventId;
+    $('#sc-event').innerHTML = eventOptions();
     if (!eventEditions(curEvent()).includes(edition)) switchTo(eventEditions(curEvent())[0]);
     $('#sc-team').innerHTML = `<option value="">Select a team…</option>${teamOptions()}`;
     if (!teamOptions().includes(`value="${teamId}"`)) teamId = '';
-    $('#sc-event').addEventListener('change', (e) => { eventId = e.target.value; refillTeams(); ensureEdition(); saveDraft(); updateStatus(); sync(); });
+    $('#sc-event').addEventListener('click', (e) => { const b = e.target.closest('[data-ev]'); if (!b) return; eventId = b.dataset.ev; $('#sc-event').innerHTML = eventOptions(); refillTeams(); ensureEdition(); saveDraft(); updateStatus(); sync(); });
     $('#sc-team').value = teamId; $('#sc-round').value = String(round); $('#sc-table').value = table;
     $('#sc-team').addEventListener('change', (e) => { teamId = e.target.value;
       const free = [1, 2, 3].find((r) => !scoredRounds(teamId).has(r));
@@ -333,7 +333,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     if (!keepTeam) teamId = lockedTeamId || '';
     if (official) {
       if (!keepTeam) $('#sc-team').value = '';
-      $('#sc-initials').value = ''; $('#sc-agree').checked = false; pad.clear();
+      $('#sc-agree').checked = false; pad.clear();
     }
     saveDraft(); sync(); showError('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -348,13 +348,11 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
     const u = user();
     const team = teams().find((t) => t.id === teamId);
     if (official) {
-      if (!u || !['judge', 'admin', 'host'].includes(u.role)) return showError('Only judges, event hosts and admins can submit official scores.');
+      if (!u || !['judge', 'admin', 'host'].includes(u.role)) return showError('Only referees, event hosts and admins can submit official scores.');
       if (!curEvent()) return showError('Choose an event first.');
       if (!team) return showError('Choose a team first.');
       if (!eventEditions(curEvent()).includes(edition) || teamEdition(team) !== edition) return showError(`Team #${team.number} plays the ${EDITIONS[teamEdition(team)].long} edition — switch the scoring edition above.`);
       if (scoredRounds(teamId).has(round) && u.role !== 'admin') return showError('That match already has an official score.');
-      const ini = $('#sc-initials').value.trim();
-      if (!ini) return showError('Enter the team initials.');
       if (pad.isEmpty) return showError('The team must sign before the score can be submitted.');
       if (!$('#sc-agree').checked) return showError('Confirm that the team and referee agree on the score.');
     } else if (!u) return showError('Sign in to save practice runs.');
@@ -363,8 +361,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
       if (official) {
         await store.submitScore({
           eventId, eventName: curEvent().name, teamId: team.id, number: team.number, name: team.name, round, total: res.total, gp: res.gp, edition,
-          state: res.state, result: slim(res), initials: $('#sc-initials').value.trim().toUpperCase() || makeInitials(team.name),
-          judgeUid: u.uid, judgeName: u.name, table: table.trim(), createdAt: Date.now(),
+          state: res.state, result: slim(res), judgeUid: u.uid, judgeName: u.name, judgeEmail: u.email || '', table: table.trim(), createdAt: Date.now(),
         }, pad.toDataURL());
         toast(`Submitted: ${team.name} — match ${round} — ${res.total} pts`, 'ok');
         round = 1; $('#sc-round').value = '1'; table = ''; $('#sc-table').value = '';
@@ -391,7 +388,7 @@ export function mountScorer(root, { mode, store, teams, scores, events = () => [
   return {
     refresh() { // teams/scores changed live
       if (official) {
-        const ev = $('#sc-event'); ev.innerHTML = eventOptions(); if (!events().some((e) => e.id === eventId)) eventId = defaultEvent(); ev.value = eventId;
+        if (!events().some((e) => e.id === eventId)) eventId = defaultEvent(); $('#sc-event').innerHTML = eventOptions();
         const sel = $('#sc-team'); const cur = sel.value; sel.innerHTML = `<option value="">Select a team…</option>${teamOptions()}`; sel.value = cur || teamId;
       }
       updateStatus();

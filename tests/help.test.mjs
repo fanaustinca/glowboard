@@ -11,3 +11,11 @@ assert.match(member, /On a team/); assert.ok(!/Running an event|>Admin<|Coaching
 assert.match(txt({ role: 'admin' }, [{ id: 'e' }]), />Admin</);
 assert.match(txt({ role: 'judge' }), /Scoring matches/);
 console.log('help checks passed');
+{
+  const { sampleRuns } = await import('../js/sample.js');
+  const runs = sampleRuns(1e12);
+  assert.equal(runs.length, 22); assert.ok(runs.every((r) => r.teamId === 'sample' && r.total > 0 && r.result?.missions));
+  assert.deepEqual(sampleRuns(1e12).map((r) => r.total), runs.map((r) => r.total), 'the sample data is deterministic');
+  assert.ok(new Set(runs.map((r) => r.edition)).size === 2, 'both editions, so the edition picker shows');
+  console.log('sample team checks passed');
+}

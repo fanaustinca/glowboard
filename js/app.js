@@ -1,9 +1,10 @@
 import { createStore } from './store.js';
 import { timerView } from './timer.js';
 import { helpView } from './help.js';
+import { sampleView } from './sample.js';
 import { dashboardView, toolView, loginView, judgeView, teamView, adminView, scheduleView, eventView, promptDefaultPasswords } from './views.js';
 import { hasRole, scoringEvents, canScore, ROLE_LABEL } from './store.js';
-import { esc, toast } from './ui.js';
+import { esc, toast, applyTheme, toggleTheme } from './ui.js';
 import { SEASON } from './missions.js';
 
 // roles: names of roles, or pseudo-roles: 'host' = host of ≥1 event (a modifier, so coaches/judges can be hosts too),
@@ -13,7 +14,7 @@ const ROUTES = {
   schedule: { view: scheduleView, label: 'Schedule', icon: '🗓️', roles: null, nav: true },
   tool: { view: toolView, label: 'Scoring tool', short: 'Tool', icon: '🧮', roles: null, nav: true },
   timer: { view: timerView, label: 'Timer', icon: '⏱️', roles: null, nav: true },
-  judge: { view: judgeView, label: 'Judge', icon: '📝', roles: ['scorer'], nav: true },
+  judge: { view: judgeView, label: 'Referee', icon: '📝', roles: ['scorer'], nav: true },
   // practice / stats / analytics used to be separate pages: they now live inside the Teams page
   practice: { view: teamView, label: 'Teams', roles: ['signedin'], nav: false },
   stats: { view: teamView, label: 'Teams', roles: ['signedin'], nav: false },
@@ -21,6 +22,7 @@ const ROUTES = {
   team: { view: teamView, label: 'Teams', icon: '👥', roles: ['signedin'], nav: true },
   event: { view: eventView, label: 'Event', icon: '🎪', roles: ['host', 'admin'], nav: true },
   admin: { view: adminView, label: 'Admin', icon: '⚙️', roles: ['admin'], nav: true },
+  sample: { view: sampleView, label: 'Sample team', short: 'Sample', icon: '🧪', roles: null, nav: true },
   help: { view: helpView, label: 'Help', icon: '❓', roles: null, nav: true },
   login: { view: loginView, label: 'Sign in', roles: null, nav: false },
 };
@@ -120,17 +122,6 @@ function route() {
   window.scrollTo(0, 0);
   main.focus({ preventScroll: true });
   document.title = `${r.label === 'Standings' ? 'Live standings' : r.label} · GlowBoard`;
-}
-
-function applyTheme() {
-  let t = null; try { t = localStorage.getItem('gb-theme'); } catch { /* ignore */ }
-  if (t) document.documentElement.dataset.theme = t;
-}
-function toggleTheme() {
-  const dark = (document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) === 'dark';
-  const next = dark ? 'light' : 'dark';
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem('gb-theme', next); } catch { /* ignore */ }
 }
 
 document.getElementById('season').textContent = `${SEASON.name} ${SEASON.years}`;

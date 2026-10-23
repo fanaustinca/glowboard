@@ -34,3 +34,14 @@ export function download(name, text, type = 'text/csv') {
   a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+
+// Theme: light unless the person picked dark (remembered in this browser).
+export function applyTheme() {
+  let t = null; try { t = localStorage.getItem('gb-theme'); } catch { /* ignore */ }
+  document.documentElement.dataset.theme = t === 'dark' ? 'dark' : 'light';
+}
+export function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('gb-theme', next); } catch { /* ignore */ }
+}

@@ -53,12 +53,12 @@ service cloud.firestore {
       return hasAccess()
         && request.auth.token.email in get(/databases/$(database)/documents/eventJudges/$(eventId)).data.get('emails', []);
     }
-    // May enter official scores for this event: admins, anyone listed as its referee, or a base-role judge
-    // (unscoped = every event; scoped by eventIds = just those).
+    // May enter official scores for this event: admins, anyone listed as its referee, or a referee account that was
+    // created for it (eventIds). Nobody gets every event by default.
     function isJudgeFor(eventId) {
       return isAdmin() || isRefereeOf(eventId)
         || (hasAccess() && myRole() == 'judge'
-          && (myDoc().data.get('eventIds', null) == null || eventId in myDoc().data.eventIds));
+          && myDoc().data.get('eventIds', []) is list && eventId in myDoc().data.get('eventIds', []));
     }
     // "Host" = flagged by an admin (host: true) or the host-only base role.
     function isHostAny() {
@@ -225,10 +225,10 @@ service cloud.firestore {
 
     match /events/{eventId} {
       allow read: if true;
-      allow create: if isAdmin() && validEditions(request.resource.data.get('editions', ['founders']));
+      allow create: if isAdmin() && validEditions(request.resource.data.get('editions', ['founders'])) && request.resource.data.get('test', false) is bool;
       allow delete: if isAdmin();
       // A host may only change the team list and the schedule of an event they host.
-      allow update: if (isAdmin() && validEditions(request.resource.data.get('editions', ['founders'])))
+      allow update: if (isAdmin() && validEditions(request.resource.data.get('editions', ['founders'])) && request.resource.data.get('test', false) is bool)
         || (isHostOf(eventId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamIds', 'schedule']));
     }
 

@@ -169,3 +169,18 @@ export function standings(teams, scores, ed = 'founders') {
   unranked.forEach((r) => { r.rank = null; r.tied = false; });
   return [...ranked, ...unranked];
 }
+
+// A plausible random match for either edition (used by test events). `skill` 0–1 makes better teams score more.
+export function randomState(ed, rand, skill = 0.5) {
+  const st = defaultState(ed), future = editionOf(ed) === 'future';
+  for (const m of missionsOf(ed)) for (const f of m.fields) {
+    const k = st.m[m.id];
+    if (f.type === 'check') k[f.key] = f.danger ? rand() < 0.05 : rand() < Math.min(0.95, skill * (f.bonus ? 0.6 : 1.1));
+    else if (f.type === 'count') k[f.key] = Math.round(rand() * f.max * skill * (f.max > 10 ? 0.5 : 1));
+    else k[f.key] = f.options[Math.min(f.options.length - 1, Math.floor(rand() * rand() * f.options.length * (0.5 + skill)))].v;
+  }
+  if (future) st.penalties = rand() < 0.1 ? 1 : 0;
+  else { st.equip = rand() < Math.min(0.97, skill * 1.3); st.tokens = 6 - Math.floor(rand() * (1 + (1 - skill) * 5)); }
+  st.gp = [2, 3, 4][Math.floor(rand() * 3)];
+  return normalizeState(st, ed);
+}

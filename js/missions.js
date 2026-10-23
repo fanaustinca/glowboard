@@ -149,8 +149,8 @@ const RAW = [
       chk('canopy', 'Nesting canopy is raised', 10),
       chk('skylight', 'Garden skylight is completely in', 10),
       chk('hatch', 'Compost hatch is completely opened, touching the mat', 10),
-      seg('dock', 'Dock the model is located in', [
-        { v: 'none', label: 'Unknown', pts: 0 },
+      seg('dock', 'Dock the model is located in (tap again to clear)', [
+        { v: 'none', label: 'None', pts: 0, hidden: true },
         { v: 'mine', label: 'Mine', pts: 0 },
         { v: 'city', label: 'City', pts: 0 },
         { v: 'farm', label: 'Farm', pts: 0 },
@@ -193,6 +193,7 @@ export const EVENT_EDITION_CHOICES = [
   { v: 'founders', label: 'Founders', editions: ['founders'] },
   { v: 'future', label: 'Future', editions: ['future'] },
   { v: 'both', label: 'Founders + Future', editions: ['founders', 'future'] },
+  { v: 'test', label: 'Test event (both editions, random scores)', editions: ['founders', 'future'], test: true },
 ];
 
 // The rulebook gives no limit for these piles (only the “max” printed on the scoresheet), so the counters stop at a

@@ -1,5 +1,5 @@
 import { MATCHES_PER_TEAM } from './missions.js';
-import { esc } from './ui.js';
+import { esc, toggleTheme } from './ui.js';
 
 // Full-screen projector scoreboard. `get()` returns { title, sub, boards: [{ label, future, rows }] } (rows = standings(), best first).
 // One board fills the screen; an event running both editions shows them side by side (Founders left, Future right).
@@ -7,7 +7,7 @@ import { esc } from './ui.js';
 export function openBigScreen(get, onClose = () => {}) {
   const el = document.createElement('div');
   el.className = 'bs'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Big screen scoreboard');
-  el.innerHTML = `<header class="bs-head"><div><h1 id="bs-title"></h1><p id="bs-sub"></p></div><button type="button" class="bs-x" id="bs-x">✕ Exit</button></header><div class="bs-body" id="bs-body"></div>`;
+  el.innerHTML = `<header class="bs-head"><div><h1 id="bs-title"></h1><p id="bs-sub"></p></div><div class="bs-btns"><button type="button" class="bs-x" id="bs-theme" aria-label="Switch light or dark">◐ Light / Dark</button><button type="button" class="bs-x" id="bs-x">✕ Exit</button></div></header><div class="bs-body" id="bs-body"></div>`;
   document.body.append(el);
   document.body.classList.add('bs-open');
   const body = el.querySelector('#bs-body');
@@ -18,7 +18,7 @@ export function openBigScreen(get, onClose = () => {}) {
       const n = table.children.length || 1;
       const h = table.clientHeight / n, w = table.clientWidth;
       // row height and width both limit the text; the columns are sized in em, so the name column gets what's left
-      table.style.fontSize = `${Math.max(8, Math.min(h * 0.52, w / 33, 80))}px`;
+      table.style.fontSize = `${Math.max(8, Math.min(h * 0.52, w / 37, 80))}px`;
     });
   }
   function board(b, split) {
@@ -53,6 +53,7 @@ export function openBigScreen(get, onClose = () => {}) {
   const onFs = () => { if (!document.fullscreenElement) close(); }; // Esc in real fullscreen only fires this
   window.addEventListener('resize', fit); document.addEventListener('keydown', onKey);
   el.querySelector('#bs-x').addEventListener('click', close);
+  el.querySelector('#bs-theme').addEventListener('click', toggleTheme);
   // Go truly full screen where the browser allows it; the overlay already covers the page if it doesn't.
   Promise.resolve(el.requestFullscreen?.()).then(() => document.addEventListener('fullscreenchange', onFs)).catch(() => {});
   render();

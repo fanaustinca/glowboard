@@ -7,7 +7,7 @@ const fb = (globalThis.__fb ||= {
 });
 // access list (document ID = lowercase gmail). ghost@gmail.com is deliberately NOT listed.
 fb.docs.access['boss@gmail.com'] ||= { role: 'admin', name: 'Boss' };
-fb.docs.access['judge@gmail.com'] ||= { role: 'judge' };
+fb.docs.access['judge@gmail.com'] ||= { role: 'judge', eventIds: ['ev1'] };
 fb.docs.access['host@gmail.com'] ||= { role: 'host' };
 fb.docs.eventHosts ||= {};
 fb.docs.eventJudges ||= {};

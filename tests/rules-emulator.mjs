@@ -18,7 +18,8 @@ await env.withSecurityRulesDisabled(async (c) => {
   const db = c.firestore();
   const w = (p, d) => setDoc(doc(db, p), d);
   await w('access/admin@x.com', { role: 'admin' });
-  await w('access/judge@x.com', { role: 'judge' });
+  await w('access/judge@x.com', { role: 'judge', eventIds: ['ev1', 'ev2'] });
+  await w('access/loose@x.com', { role: 'judge' });
   await w('access/host@x.com', { role: 'host' });
   await w('access/host2@x.com', { role: 'host' });
   await w('access/coachhost@x.com', { role: 'coach', teamId: 't1', host: true });
@@ -217,7 +218,8 @@ ok('hosts list/remove only the judges they added; cannot widen a judge’s event
 // event-limited judges
 await assertSucceeds(setDoc(doc(scoped, 'scores/ev2_t1_R1'), score({ eventId: 'ev2', teamId: 't1', judgeUid: 'u-sc' }))); await assertFails(setDoc(doc(scoped, 'scores/ev1_t1_R2'), score({ teamId: 't1', round: 2, judgeUid: 'u-sc' })));
 await assertSucceeds(setDoc(doc(judge, 'scores/ev2_t2_R1'), score({ eventId: 'ev2', judgeUid: 'u-judge' }))); await assertSucceeds(setDoc(doc(admin, 'scores/ev2_t2_R2'), score({ eventId: 'ev2', round: 2, judgeUid: 'u-admin' })));
-ok('event-limited judges can only score their own event; unscoped judges and admins can score any');
+await assertFails(setDoc(doc(as('u-loose', 'loose@x.com'), 'scores/ev2_t4_R1'), score({ eventId: 'ev2', teamId: 't4', judgeUid: 'u-loose' })));
+ok('referees can only score events they were added to (a referee account with no events scores nothing); admins can score any');
 await assertSucceeds(setDoc(doc(admin, 'access/cohost@gmail.com'), { role: 'coach', teamId: 't1', host: true })); await assertSucceeds(updateDoc(doc(admin, 'access/coach@x.com'), { host: true })); ok('admins grant the host flag to anyone');
 // referee is a per-event modifier too (a coach can referee)
 await assertSucceeds(setDoc(doc(host, 'eventJudges/ev1'), { emails: ['coach2@x.com', 'coach@x.com'] })); await assertSucceeds(getDoc(doc(host, 'eventJudges/ev1')));
@@ -319,6 +321,7 @@ ok('the pro coach now coaches t3 and t7 at once');
   await can('admin switches a team’s edition', updateDoc(doc(admin, 'teams/t30'), { edition: 'founders' })); await cannot('…but not to a made-up one', updateDoc(doc(admin, 'teams/t30'), { edition: 'bogus' }));
   await cannot('a host cannot change a team’s edition', updateDoc(doc(host, 'teams/t32'), { edition: 'founders' })); await cannot('a coach cannot change their team’s edition', updateDoc(doc(coach, 'teams/t1'), { edition: 'future' }));
   await can('admin creates an event for Future only', setDoc(doc(admin, 'events/evF'), { name: 'Future Day', editions: ['future'] })); await can('…for both editions', setDoc(doc(admin, 'events/evB'), { name: 'Both Day', editions: ['founders', 'future'] }));
+  await can('admin creates a test event', setDoc(doc(admin, 'events/evT'), { name: 'Test Day', editions: ['founders', 'future'], test: true, teamIds: [] })); await cannot('…but test must be true/false', setDoc(doc(admin, 'events/evT2'), { name: 'T', test: 'yes' }));
   await can('…and an event with no editions field (Founders)', setDoc(doc(admin, 'events/evOld'), { name: 'Old style' }));
   await can('admin changes an existing event\'s editions', updateDoc(doc(admin, 'events/evOld'), { editions: ['future'] })); await cannot('…but not to a made-up edition', updateDoc(doc(admin, 'events/evOld'), { editions: ['bogus'] }));
   await cannot('a host cannot change an event\'s editions', updateDoc(doc(host, 'events/ev1'), { editions: ['future'] }));

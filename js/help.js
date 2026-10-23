@@ -11,12 +11,13 @@ export function helpSections(u, scoreable = []) {
     '<b>Standings</b> shows each event’s leaderboard. Pick an event at the top; Founders ranks by a team’s best match, Future by the average of its matches. <b>Big screen</b> fills a projector with every team’s three round scores.',
     '<b>Schedule</b> lists each event’s published match schedule and tables.',
     '<b>Scoring tool</b> is a calculator for either edition. Nothing is saved, and it is separate from practice runs and official scoring.',
-    '<b>Timer</b> runs the 2:30 match with 3-2-1 beeps, a start horn, reminders at 1:00 and 0:30 and an end horn. Turn the sound up first.',
+    '<b>Timer</b> runs the 2:30 match with a start horn, reminders at 1:00 and 0:30 and an end horn. Turn the sound up first.',
+    '<b>Sample team</b> has made-up practice runs so you can try the Stats and Advanced tools. It is read-only.',
     '<b>Live help</b> (below) lets you message the admins with a question. You don’t need to sign in.',
   ]));
   if (!u) {
     out.push(sec('Signing in', 'Sign in (top right)', [
-      'Coaches, judges, event hosts and admins sign in with the Google account they were added with.',
+      'Coaches, referees, event hosts and admins sign in with the Google account they were added with.',
       'Team members sign in with their team number and the team password their coach gives them.',
     ]));
     return out;
@@ -25,7 +26,7 @@ export function helpSections(u, scoreable = []) {
   const admin = u.role === 'admin', host = Boolean(u.host) || u.role === 'host', scorer = canScore(u, scoreable);
 
   if (scorer) {
-    out.push(sec('Scoring matches', 'Judge', [
+    out.push(sec('Scoring matches', 'Referee', [
       'Choose the <b>event</b>, <b>team</b>, <b>round</b> and <b>table</b>, and the <b>scoring edition</b> (Founders or Future) at the top. Only teams of that edition are listed.',
       'Tap each mission as the referee reads it out, then have the team sign and press submit.',
       'A submitted score cannot be edited. If it was wrong, an event host or admin deletes it and it can be scored again.',
@@ -36,7 +37,8 @@ export function helpSections(u, scoreable = []) {
     out.push(sec('Admin', 'Admin', [
       '<b>Events:</b> create events and choose their editions (Founders, Future or both). Change the editions of an existing event with the selector on its row. Make an event live, assign hosts, or delete it.',
       '<b>Teams:</b> add teams (one at a time or in bulk), rename them, switch a team between Founders and Future, delete them, and see or change a team’s password.',
-      '<b>People:</b> give people Judge, Coach or Admin access by Gmail address, and remove them again.',
+      '<b>People:</b> give people Referee, Coach or Admin access by Gmail address, and remove them again.',
+      '<b>Events:</b> rename an event from its row. A <b>test event</b> has tools to add demo teams and generate random scores.',
       '<b>Scores:</b> delete an official score so the match can be re-scored.',
       '<b>Give help</b> (below): read live-help messages from anyone, see their name, table or team and sign-in, reply, mark them resolved or delete them. Only admins can reply.',
       'You also have everything an event host has, in the <b>Event</b> tab.',
@@ -45,10 +47,10 @@ export function helpSections(u, scoreable = []) {
   if (host) {
     out.push(sec('Running an event', 'Event', [
       'You see only the events you host. Pick one at the top.',
-      '<b>Teams:</b> choose which teams play in the event, and add new teams. Set the coach’s Gmail when you add a team. You can rename or delete the teams you created.',
+      '<b>Teams:</b> only the teams you add to the event play in it. Add them one at a time or in bulk by team number — a number that already exists is the same team, so it is reused. A new team needs a name and its coach’s Gmail.',
       '<b>Team passwords:</b> you can set a new password for a team, but you cannot see the current one. The coach reads it on the Teams tab.',
-      '<b>Schedule:</b> generate a match schedule, review it, then save it to publish it on the Schedule page.',
-      '<b>Scoring:</b> you can enter official scores for your events from the Judge tab, and delete a score so a match can be re-scored.',
+      '<b>Schedule:</b> generate a match schedule (teams are shuffled so they meet different opponents each round), edit it by hand if you need to, print it, then publish it on the Schedule page.',
+      '<b>Scoring:</b> you can enter official scores for your events from the Referee tab, and delete a score so a match can be re-scored.',
       '<b>Referees:</b> add or remove the people who may score at your event.',
     ]));
   }

@@ -6,7 +6,7 @@ import { scoreAll, defaultState, editionOf, standings } from './scoring.js';
 import { MISSIONS, MATCHES_PER_TEAM, EDITION_IDS, EDITIONS } from './missions.js';
 
 export const ROLES = ['admin', 'host', 'judge', 'coach', 'member'];
-export const ROLE_LABEL = { admin: 'Admin', host: 'Event host', judge: 'Judge', coach: 'Coach', member: 'Team member' };
+export const ROLE_LABEL = { admin: 'Admin', host: 'Event host', judge: 'Referee', coach: 'Coach', member: 'Team member' };
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Events a signed-in user may run: admins all of them; anyone else only the events whose eventHosts list has their
 // email (host is a per-event modifier — a coach or judge can be a host too). eventHosts rows are { id: eventId, emails }.
@@ -14,12 +14,12 @@ export const hostedEvents = (user, events, eventHosts) => (user?.role === 'admin
   : user ? events.filter((e) => eventHosts.some((h) => h.id === e.id && (h.emails || []).includes(user.email))) : []);
 // Events the user is a listed referee for (a per-event modifier, so a coach or member can referee too).
 export const refereedEvents = (user, events, eventJudges) => (user ? events.filter((e) => eventJudges.some((j) => j.id === e.id && (j.emails || []).includes(user.email))) : []);
-// Events a user may enter official scores for: admins all; base-role judges all (or just their eventIds);
-// plus every event they host or referee.
+// Events a user may enter official scores for: admins all; everyone else only the events they were added to
+// (referee list, a referee account's eventIds) or host.
 export const scoringEvents = (user, events, eventHosts, eventJudges = []) => {
   if (!user) return [];
   if (user.role === 'admin') return events;
-  const own = user.role === 'judge' ? (user.eventIds ? events.filter((e) => user.eventIds.includes(e.id)) : events) : [];
+  const own = user.role === 'judge' && user.eventIds ? events.filter((e) => user.eventIds.includes(e.id)) : [];
   return [...new Map([...own, ...hostedEvents(user, events, eventHosts), ...refereedEvents(user, events, eventJudges)].map((e) => [e.id, e])).values()];
 };
 // Only people who can actually score get the Judge page: a judge account, or anyone with at least one event to score.
@@ -64,10 +64,10 @@ export const eventEditions = (ev) => {
   return e.length ? EDITION_IDS.filter((x) => e.includes(x)) : ['founders'];
 };
 export const teamEdition = (t) => editionOf(t);
-// The teams in an event: its chosen teams (or all) that play one of the event's editions.
+// The teams in an event: the ones added to it (events made before team lists existed have none saved and show every team) that play one of its editions.
 export const eventTeams = (ev, teams) => {
   const eds = eventEditions(ev);
-  return (ev?.teamIds?.length ? teams.filter((t) => ev.teamIds.includes(t.id)) : teams).filter((t) => eds.includes(teamEdition(t)));
+  return (Array.isArray(ev?.teamIds) ? teams.filter((t) => ev.teamIds.includes(t.id)) : teams).filter((t) => eds.includes(teamEdition(t)));
 };
 // One leaderboard per edition the event runs: [{ ed, label, future, rows: standings() }], Founders first.
 export const eventBoards = (ev, teams, scores) => {
@@ -137,6 +137,7 @@ function seedDemo() {
   db.events[E1] = { id: E1, name: 'Regional Qualifier (demo)', date: '2026-11-14', live: true, teamIds: DEMO_TEAMS.map(([n]) => `t${n}`), createdAt: 2 };
   db.events[E2] = { id: E2, name: 'Season Opener Scrimmage (demo)', date: '2026-10-25', live: false, teamIds: ['t4201', 't5530'], createdAt: 1 };
   db.eventHosts[E2] = { id: E2, emails: ['host@demo.test', 'cohost@demo.test'] };
+  db.eventJudges[E1] = { id: E1, emails: ['judge@demo.test'] }; db.eventJudges[E2] = { id: E2, emails: ['judge@demo.test'] };
   DEMO_TEAMS.forEach(([number, name], i) => {
     const id = `t${number}`;
     db.teams[id] = { id, number, name, createdBy: 'demo', ...(DEMO_COLORS[id] ? { colors: DEMO_COLORS[id] } : {}) };
@@ -148,7 +149,7 @@ function seedDemo() {
       const sid = scoreId(E1, id, r);
       db.scores[sid] = {
         id: sid, eventId: E1, teamId: id, number, name, round: r, total: res.total, gp: res.gp, state: res.state,
-        result: slim(res), hasSignature: true, initials: initials(name), judgeUid: 'judge@demo.test', judgeName: 'Jo (judge)',
+        result: slim(res), hasSignature: true, judgeUid: 'judge@demo.test', judgeName: 'Jo (judge)', judgeEmail: 'judge@demo.test',
         table: String(1 + (i % 4)), createdAt: Date.now() - (rounds - r + 1) * 3600e3 - i * 60e3,
       };
       db.signatures[sid] = { id: sid, signature: '' }; // demo seed has no drawn signature
@@ -272,7 +273,7 @@ class DemoStore {
   isHost(u) { return Boolean(u?.host); }
   canSecret(u, teamId) { return this.isAdmin(u) || this.coachOf(u, teamId) || (this.isHost(u) && this.db.teams[teamId]?.createdBy === u.email); }
   refereeOf(u, eventId) { return Boolean(u) && (this.db.eventJudges[eventId]?.emails || []).includes(u.email); }
-  judgeFor(u, eventId) { return this.isAdmin(u) || this.refereeOf(u, eventId) || (u?.role === 'judge' && (!u.eventIds || u.eventIds.includes(eventId))); }
+  judgeFor(u, eventId) { return this.isAdmin(u) || this.refereeOf(u, eventId) || (u?.role === 'judge' && Array.isArray(u.eventIds) && u.eventIds.includes(eventId)); }
   hostOf(u, eventId) { return this.isHost(u) && (this.db.eventHosts[eventId]?.emails || []).includes(u.email); }
   validTeam(d) {
     const c = d.colors ?? [];
@@ -689,7 +690,7 @@ class FirebaseStore {
       let exists = false; try { exists = (await fs.getDoc(fs.doc(this.fdb, 'scores', id))).exists(); } catch { /* ignore */ }
       throw err('permission-denied', exists
         ? 'This match already has an official score. The event’s host or an admin has to delete it before it can be scored again.'
-        : 'Firestore refused this score. This Google account must be an admin, a judge, a listed referee or a host of this event — and the latest firestore.rules must be published.');
+        : 'Firestore refused this score. This Google account must be an admin, a referee or a host of this event — and the latest firestore.rules must be published.');
     }
   }
   async get(col, id) {
