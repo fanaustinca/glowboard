@@ -681,6 +681,26 @@ await check('admin can change an event\'s editions after it is created', async (
   assert.equal(await page.$eval(`[data-evedsel="${id}"]`, (e) => e.value), 'founders');
   await page.evaluate(() => document.getElementById('signout').click());
 });
+await check('live help: a guest asks, an admin sees who and replies, the guest sees the reply; others cannot reply', async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  await goHash(page, 'help');
+  assert.ok(await page.$('#chat-form'), 'the chat is open to people who are not signed in');
+  assert.equal(await page.$('#in-list'), null, 'no admin inbox for guests');
+  await page.type('#chat-name', 'Pat'); await page.type('#chat-contact', 'Table 3'); await page.type('#chat-text', 'Our table has no mat');
+  await tap(page, '#chat-send'); await page.waitForFunction(() => document.querySelector('#chat-log')?.textContent.includes('Our table has no mat'));
+  await login(page, 'admin@demo.test'); await goHash(page, 'help');
+  assert.equal(await page.$('#chat-form'), null, 'admins get the inbox, not the ask form');
+  await page.waitForSelector('#in-list .th');
+  assert.match(await text(page, '#in-list'), /Pat · Table 3/); assert.match(await text(page, '#in-list'), /needs reply/);
+  await tap(page, '#in-list .th'); await page.waitForSelector('#in-text');
+  assert.match(await text(page, '#in-thread'), /Not signed in/); assert.match(await text(page, '#in-log'), /Our table has no mat/);
+  await page.type('#in-text', 'On our way'); await page.$eval('#in-form', (f) => f.requestSubmit()); await page.waitForFunction(() => document.querySelector('#in-log')?.textContent.includes('On our way'));
+  assert.match(await text(page, '#in-list'), /replied/);
+  await page.evaluate(() => document.getElementById('signout').click()); await wait(150);
+  await goHash(page, ''); await goHash(page, 'help'); await page.waitForFunction(() => document.querySelector('#chat-log')?.textContent.includes('On our way'));
+  assert.match(await text(page, '#chat-log'), /Support/);
+  assert.equal(await page.$('#in-list'), null);
+});
 await check('match timer: sound reminder popup, 3-2-1 countdown, then 2:30 runs; pause and reset', async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   await goHash(page, 'timer');

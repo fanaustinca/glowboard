@@ -29,6 +29,9 @@ export const hasRole = (u, r) => Boolean(u) && (r === 'host' ? u.host : r === 't
 // A person can be on many teams, with a role per team (coach only where the roster says so).
 export const isCoachOn = (u, teamId) => Boolean(u?.teams?.some((t) => t.teamId === teamId && t.role === 'coach'));
 export const coachTeamIds = (u) => (u?.teams || []).filter((t) => t.role === 'coach').map((t) => t.teamId);
+export const HELP_MAX = 500;
+export const validHelpId = (t) => typeof t === 'string' && /^[A-Za-z0-9]{20,48}$/.test(t);
+export const newHelpId = () => { const a = new Uint8Array(24); (globalThis.crypto || window.crypto).getRandomValues(a); return [...a].map((x) => 'abcdefghijklmnopqrstuvwxyz0123456789'[x % 36]).join(''); };
 export const rosterId = (teamId, email) => `${teamId}__${email}`;
 export const memberDocId = (uid, teamId) => `${uid}_${teamId}`;
 const ACTIVE_KEY = 'gb-active-team', LOCAL_TEAMS_KEY = 'gb-my-teams';
@@ -411,6 +414,43 @@ class DemoStore {
     if (col === 'scores') delete this.db.signatures[id];
     this.persist(); this.emit();
   }
+
+  // ----- live help chat (no sign-in needed to ask; only admins reply) -----
+  helpDb() { this.db.helpThreads ||= {}; this.db.helpMsgs ||= {}; return this.db; }
+  async helpSend(tid, { name = '', contact = '', text }) {
+    const d = this.helpDb(), u = this.user, now = Date.now();
+    text = String(text || '').trim().slice(0, HELP_MAX);
+    if (!text || !validHelpId(tid)) throw denied('Write a message first.');
+    const t = d.helpThreads[tid];
+    const info = { name: String(name).trim().slice(0, 60), contact: String(contact).trim().slice(0, 80), email: u?.email || '' };
+    d.helpThreads[tid] = { ...(t || { createdAt: now }), ...info, lastAt: now, lastFrom: 'user', last: text.slice(0, 100), resolved: false };
+    d.helpMsgs[`${tid}_${now}_${Math.random().toString(36).slice(2, 6)}`] = { tid, from: 'user', text, createdAt: now };
+    this.persist(); this.emit();
+  }
+  async helpFetch(tid) {
+    const d = this.helpDb();
+    const thread = d.helpThreads[tid] ? { id: tid, ...d.helpThreads[tid] } : null;
+    const msgs = Object.entries(d.helpMsgs).filter(([, m]) => m.tid === tid).map(([id, m]) => ({ id, ...m })).sort((a, b) => a.createdAt - b.createdAt);
+    return { thread, msgs };
+  }
+  async helpThreads() {
+    this.need(this.isAdmin);
+    return Object.entries(this.helpDb().helpThreads).map(([id, t]) => ({ id, ...t })).sort((a, b) => b.lastAt - a.lastAt);
+  }
+  async helpReply(tid, text) {
+    this.need(this.isAdmin);
+    const d = this.helpDb(), now = Date.now(); text = String(text || '').trim().slice(0, HELP_MAX);
+    if (!text || !d.helpThreads[tid]) throw denied('Write a reply first.');
+    d.helpMsgs[`${tid}_${now}_${Math.random().toString(36).slice(2, 6)}`] = { tid, from: 'admin', text, createdAt: now };
+    d.helpThreads[tid] = { ...d.helpThreads[tid], lastAt: now, lastFrom: 'admin', last: text.slice(0, 100) };
+    this.persist(); this.emit();
+  }
+  async helpResolve(tid, resolved) { this.need(this.isAdmin); const d = this.helpDb(); if (d.helpThreads[tid]) d.helpThreads[tid].resolved = Boolean(resolved); this.persist(); this.emit(); }
+  async helpDelete(tid) {
+    this.need(this.isAdmin); const d = this.helpDb();
+    delete d.helpThreads[tid]; for (const [id, m] of Object.entries(d.helpMsgs)) if (m.tid === tid) delete d.helpMsgs[id];
+    this.persist(); this.emit();
+  }
   async resetDemo() { this.need(this.isAdmin); this.db = seedDemo(); this.setSession('admin@demo.test'); this.persist(); this.emit(); this.emitAuth(); }
   newId(prefix = 'x') { return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; }
 }
@@ -659,6 +699,54 @@ class FirebaseStore {
   async remove(col, id) {
     if (col === 'scores') { try { await this.sdk.fs.deleteDoc(this.sdk.fs.doc(this.fdb, 'signatures', id)); } catch { /* may not exist */ } }
     try { await this.sdk.fs.deleteDoc(this.sdk.fs.doc(this.fdb, col, id)); } catch (e) { throw friendly(e); }
+  }
+
+  // ----- live help chat -----
+  async helpSend(tid, { name = '', contact = '', text }) {
+    const { fs } = this.sdk, now = Date.now();
+    text = String(text || '').trim().slice(0, HELP_MAX);
+    if (!text || !validHelpId(tid)) throw err('invalid', 'Write a message first.');
+    const info = { name: String(name).trim().slice(0, 60), contact: String(contact).trim().slice(0, 80), email: this.cur?.email || '' };
+    const ref = fs.doc(this.fdb, 'helpThreads', tid);
+    try {
+      const exists = (await fs.getDoc(ref)).exists();
+      const b = fs.writeBatch(this.fdb);
+      const fields = { ...info, lastAt: now, lastFrom: 'user', last: text.slice(0, 100), resolved: false };
+      if (exists) b.update(ref, fields); else b.set(ref, { ...fields, createdAt: now });
+      b.set(fs.doc(fs.collection(ref, 'msgs')), { from: 'user', text, createdAt: now });
+      await b.commit();
+    } catch (e) { throw friendly(e); }
+  }
+  async helpFetch(tid) {
+    const { fs } = this.sdk, ref = fs.doc(this.fdb, 'helpThreads', tid);
+    try {
+      const [t, m] = await Promise.all([fs.getDoc(ref), fs.getDocs(fs.query(fs.collection(ref, 'msgs'), fs.orderBy('createdAt')))]);
+      return { thread: t.exists() ? { id: t.id, ...t.data() } : null, msgs: m.docs.map((d) => ({ id: d.id, ...d.data() })) };
+    } catch (e) { throw friendly(e); }
+  }
+  async helpThreads() {
+    const { fs } = this.sdk;
+    try { return (await fs.getDocs(fs.collection(this.fdb, 'helpThreads'))).docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => b.lastAt - a.lastAt); } catch (e) { throw friendly(e); }
+  }
+  async helpReply(tid, text) {
+    const { fs } = this.sdk, now = Date.now(), ref = fs.doc(this.fdb, 'helpThreads', tid);
+    text = String(text || '').trim().slice(0, HELP_MAX);
+    if (!text) throw err('invalid', 'Write a reply first.');
+    try {
+      const b = fs.writeBatch(this.fdb);
+      b.set(fs.doc(fs.collection(ref, 'msgs')), { from: 'admin', text, createdAt: now });
+      b.update(ref, { lastAt: now, lastFrom: 'admin', last: text.slice(0, 100) });
+      await b.commit();
+    } catch (e) { throw friendly(e); }
+  }
+  async helpResolve(tid, resolved) { try { await this.sdk.fs.updateDoc(this.sdk.fs.doc(this.fdb, 'helpThreads', tid), { resolved: Boolean(resolved) }); } catch (e) { throw friendly(e); } }
+  async helpDelete(tid) {
+    const { fs } = this.sdk, ref = fs.doc(this.fdb, 'helpThreads', tid);
+    try {
+      const m = await fs.getDocs(fs.collection(ref, 'msgs'));
+      for (const d of m.docs) await fs.deleteDoc(d.ref);
+      await fs.deleteDoc(ref);
+    } catch (e) { throw friendly(e); }
   }
   newId(prefix = 'x') { return this.sdk.fs.doc(this.sdk.fs.collection(this.fdb, 'ids')).id.slice(0, 12) || prefix + Date.now(); }
 }

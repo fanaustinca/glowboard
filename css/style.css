@@ -366,3 +366,22 @@ body.bs-open { overflow: hidden; }
 .help-sec h2 { margin: 0 0 4px; }
 .help-sec .where { margin: 0 0 6px; color: var(--muted); font-size: .9rem; }
 .help-sec ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px; }
+
+/* Live help chat */
+.chat h2 { margin-top: 0; }
+.chat-log { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--surface2); border-radius: 12px; margin: 10px 0; min-height: 80px; }
+.hb { max-width: 85%; padding: 8px 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
+.hb.me { align-self: flex-end; background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.hb .hb-t { white-space: pre-wrap; overflow-wrap: anywhere; }
+.hb small { opacity: .75; display: block; margin-top: 2px; }
+.chat-form textarea { width: 100%; font: inherit; }
+.chat-form .row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 10px; }
+.chat-act { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.inbox { display: grid; grid-template-columns: minmax(12rem, 18rem) 1fr; gap: 12px; align-items: start; }
+@media (max-width: 719px) { .inbox { grid-template-columns: 1fr; } }
+.threads { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 420px; overflow-y: auto; }
+.th { width: 100%; text-align: left; display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.th.on { border-color: var(--accent); } .th.new b::before { content: '● '; color: #d97706; }
+.th .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.th-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+#help-chat, #help-inbox { margin-top: 12px; }

@@ -328,5 +328,24 @@ ok('the pro coach now coaches t3 and t7 at once');
   await cannot('…but not with a made-up edition', setDoc(doc(coach, 'practice/pf2'), { uid: 'u-coach', teamId: 't1', total: 10, edition: 'bogus', createdAt: 5 }));
   ok('editions: Future scores/practice runs/teams/events validate; only admins create events and switch a team’s edition');
 }
+
+// ── live help chat ──
+{
+  const T = 'abcdefghij0123456789abcd', now = Date.now();
+  const thread = (o = {}) => ({ name: 'Pat', contact: 'Table 3', email: '', createdAt: now, lastAt: now, lastFrom: 'user', last: 'hi', resolved: false, ...o });
+  await assertSucceeds(setDoc(doc(anon, `helpThreads/${T}`), thread())); await assertSucceeds(setDoc(doc(anon, `helpThreads/${T}/msgs/m1`), { from: 'user', text: 'hi', createdAt: now }));
+  await assertSucceeds(getDoc(doc(anon, `helpThreads/${T}`))); await assertSucceeds(getDocs(collection(anon, `helpThreads/${T}/msgs`)));
+  await assertFails(getDocs(collection(anon, 'helpThreads'))); await assertFails(getDocs(collection(judge, 'helpThreads')));
+  await assertSucceeds(getDocs(collection(admin, 'helpThreads')));
+  await assertFails(setDoc(doc(anon, 'helpThreads/short'), thread())); await assertFails(setDoc(doc(anon, `helpThreads/${T}x2345678901234567`), thread({ lastFrom: 'admin' })));
+  await assertFails(setDoc(doc(anon, `helpThreads/${T}z`), thread({ email: 'admin@x.com' }))); await assertSucceeds(setDoc(doc(as('u-g', 'guest@gmail.com'), `helpThreads/${T}y`), thread({ email: 'guest@gmail.com' })));
+  await assertFails(setDoc(doc(anon, `helpThreads/${T}/msgs/m2`), { from: 'admin', text: 'I am support', createdAt: now })); await assertFails(setDoc(doc(judge, `helpThreads/${T}/msgs/m2`), { from: 'admin', text: 'x', createdAt: now }));
+  await assertFails(setDoc(doc(anon, `helpThreads/${T}/msgs/m3`), { from: 'user', text: 'x'.repeat(501), createdAt: now })); await assertFails(setDoc(doc(anon, `helpThreads/${T}/msgs/m4`), { from: 'user', text: '', createdAt: now }));
+  await assertSucceeds(setDoc(doc(admin, `helpThreads/${T}/msgs/m5`), { from: 'admin', text: 'On our way', createdAt: now + 1 }));
+  await assertSucceeds(updateDoc(doc(anon, `helpThreads/${T}`), { lastAt: now + 2, lastFrom: 'user', last: 'again', resolved: false })); await assertFails(updateDoc(doc(anon, `helpThreads/${T}`), { lastFrom: 'admin' }));
+  await assertFails(updateDoc(doc(anon, `helpThreads/${T}`), { resolved: true })); await assertFails(deleteDoc(doc(anon, `helpThreads/${T}`))); await assertFails(deleteDoc(doc(anon, `helpThreads/${T}/msgs/m1`)));
+  await assertSucceeds(updateDoc(doc(admin, `helpThreads/${T}`), { resolved: true, lastFrom: 'admin' })); await assertSucceeds(deleteDoc(doc(admin, `helpThreads/${T}/msgs/m1`))); await assertSucceeds(deleteDoc(doc(admin, `helpThreads/${T}`)));
+  ok('live help: anyone can ask (guests too, email only if it is really theirs); only admins list, reply, resolve and delete');
+}
 await env.cleanup();
 console.log(`\n${passed} emulator checks passed`);

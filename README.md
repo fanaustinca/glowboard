@@ -80,3 +80,6 @@ SHOTS=1 npm run test:ui   # also writes screenshots to tests/shots/
 Set `CHROME_PATH` if Chrome isn't auto-detected. CI runs all of it, then deploys to GitHub Pages.
 
 *GlowBoard is unofficial. The FIRST® LEGO® League Robot Game Rulebook and Challenge Updates always take precedence.*
+
+## Live help chat
+The Help tab has a text-only chat for anyone (no sign-in). A conversation is `helpThreads/{id}` (name, table/team, email if signed in, last message) with messages in `helpThreads/{id}/msgs`. The id is a long random string kept in the visitor's browser: `get` is open, `list` is admin-only. Only admins reply, resolve or delete; they see everything under Help → Give help. Pages check for new messages every 15–30 seconds. Republish `firestore.rules` for it to work on the live database.
