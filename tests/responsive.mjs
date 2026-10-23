@@ -184,7 +184,7 @@ await login(page, 'judge@demo.test');
 
 await check('judge nav shows Judge but not Host/Practice/My stats', async () => {
   const links = await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent));
-  assert.deepEqual(links, ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Referee', 'Teams', 'Sample team', 'Help']);
+  assert.deepEqual(links, ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Referee', 'Teams', 'Sample team', 'Resources', 'Help']);
 });
 
 const expect = defaultState();
@@ -306,7 +306,7 @@ await check('judges cannot delete scores or touch teams/accounts', async () => {
 await page.evaluate(() => document.getElementById('signout').click());
 await login(page, 'coach@demo.test');
 await check('coach nav shows Practice, Team stats and My team only', async () => {
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Teams', 'Sample team', 'Help']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Teams', 'Sample team', 'Resources', 'Help']);
 });
 await check('team can save a practice run (no signature needed) and sees it in stats', async () => {
   await goHash(page, 'practice');
@@ -444,7 +444,7 @@ await check('admin assigns an event host; host manages teams and builds + saves 
   assert.match(await text(page, '#a-users'), /coach@demo\.test[\s\S]*|Coach Casey/); assert.ok((await page.$$('#a-users .live-b')).length >= 1, 'host badge on people list');
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'host@demo.test');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Referee', 'Teams', 'Event', 'Sample team', 'Help']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Referee', 'Teams', 'Event', 'Sample team', 'Resources', 'Help']);
   await goHash(page, 'event');
   assert.match(await text(page, '#ev'), /Season Opener/);
   assert.equal(await page.$('#e-sel'), null, 'host of one event sees only that event');
@@ -507,7 +507,7 @@ await check('team password sign-in (demo): members join with number + password, 
   await join('4201', 'wrong1'); assert.match(await text(page, '#lg-err'), /don’t match/);
   await join('4201', '424242', 'Sam');
   assert.equal(await page.evaluate(() => location.hash), '#/team');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Teams', 'Sample team', 'Help']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Teams', 'Sample team', 'Resources', 'Help']);
   await tap(page, '#td-practice'); await page.waitForSelector('#sc-equip'); await tap(page, '#sc-equip'); await tap(page, '#sc-submit'); await page.waitForSelector('.toast.ok');
   await goHash(page, 'stats'); assert.match(await text(page, '#st'), /Sam/, 'their name is on the run in the shared team history');
   await goHash(page, 'team'); assert.equal(await page.$('#t-add'), null);
@@ -534,7 +534,7 @@ await check('team password sign-in (demo): members join with number + password, 
 await check('coach who is also a host: coach pages + host pages, phone bar = 4 tabs + More, nothing leaks to other events', async () => {
   await page.evaluate(() => document.getElementById('signout').click());
   await login(page, 'cohost@demo.test');
-  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Referee', 'Teams', 'Event', 'Sample team', 'Help']);
+  assert.deepEqual(await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent)), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Referee', 'Teams', 'Event', 'Sample team', 'Resources', 'Help']);
   assert.equal(await page.$$eval('#nav > a', (a) => a.length), 4); assert.ok(await page.$('#nav-more'));
   assert.match(await text(page, '#who'), /host/i);
   const box = await page.$eval('#nav', (e) => { const r = e.getBoundingClientRect(); return { bottom: r.bottom, h: innerHeight, items: [...e.children].filter((c) => c.tagName !== 'DIV').map((c) => c.getBoundingClientRect().width) }; });
@@ -692,6 +692,12 @@ await check('sample team: public, read-only, stats and advanced work', async () 
   assert.equal(await page.$('#td-practice, #sc-submit'), null, 'no way to add practice runs');
   await page.$eval('[data-tab="advanced"]', (e) => e.click()); await page.waitForSelector('#sp-advanced .an-table, #sp-advanced .card');
   assert.ok((await page.$$eval('#sp-advanced .an-table tbody tr', (r) => r.length)) >= 10, 'advanced analytics has data to show');
+});
+await check('resources tab is public and links out to the rulebooks', async () => {
+  await page.evaluate(() => { document.getElementById('signout')?.click(); });
+  await goHash(page, 'resources');
+  assert.match(await text(page, 'main'), /Robot Game Rulebook[\s\S]*Future Edition Rulebook[\s\S]*Referee/);
+  assert.ok((await page.$$eval('.reslist a[target=_blank]', (a) => a.every((x) => x.rel.includes('noopener')))), 'external links open safely');
 });
 await check('live help: a guest asks, an admin sees who and replies, the guest sees the reply; others cannot reply', async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));

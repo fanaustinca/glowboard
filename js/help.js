@@ -12,6 +12,7 @@ export function helpSections(u, scoreable = []) {
     '<b>Schedule</b> lists each event’s published match schedule and tables.',
     '<b>Scoring tool</b> is a calculator for either edition. Nothing is saved, and it is separate from practice runs and official scoring.',
     '<b>Timer</b> runs the 2:30 match with a start horn, reminders at 1:00 and 0:30 and an end horn. Turn the sound up first.',
+    '<b>Resources</b> links to the Founders and Future rulebooks, scoresheets and referee training. It is open to everyone.',
     '<b>Sample team</b> has made-up practice runs so you can try the Stats and Advanced tools. It is read-only.',
     '<b>Live help</b> (below) lets you message the admins with a question. You don’t need to sign in.',
   ]));

@@ -2,6 +2,7 @@ import { createStore } from './store.js';
 import { timerView } from './timer.js';
 import { helpView } from './help.js';
 import { sampleView } from './sample.js';
+import { resourcesView } from './resources.js';
 import { dashboardView, toolView, loginView, judgeView, teamView, adminView, scheduleView, eventView, promptDefaultPasswords } from './views.js';
 import { hasRole, scoringEvents, canScore, ROLE_LABEL } from './store.js';
 import { esc, toast, applyTheme, toggleTheme } from './ui.js';
@@ -23,6 +24,7 @@ const ROUTES = {
   event: { view: eventView, label: 'Event', icon: '🎪', roles: ['host', 'admin'], nav: true },
   admin: { view: adminView, label: 'Admin', icon: '⚙️', roles: ['admin'], nav: true },
   sample: { view: sampleView, label: 'Sample team', short: 'Sample', icon: '🧪', roles: null, nav: true },
+  resources: { view: resourcesView, label: 'Resources', icon: '📚', roles: null, nav: true },
   help: { view: helpView, label: 'Help', icon: '❓', roles: null, nav: true },
   login: { view: loginView, label: 'Sign in', roles: null, nav: false },
 };

@@ -19,3 +19,10 @@ console.log('help checks passed');
   assert.ok(new Set(runs.map((r) => r.edition)).size === 2, 'both editions, so the edition picker shows');
   console.log('sample team checks passed');
 }
+{
+  const { RESOURCE_GROUPS } = await import('../js/resources.js');
+  const all = RESOURCE_GROUPS.flatMap((g) => g.items);
+  assert.ok(all.every(([t, d, url]) => t && d && /^https:\/\//.test(url)), 'every resource is an https link');
+  assert.ok(RESOURCE_GROUPS.some((g) => /Founders/.test(g.title)) && RESOURCE_GROUPS.some((g) => /Future/.test(g.title)) && RESOURCE_GROUPS.some((g) => /training/i.test(g.title)));
+  console.log('resources checks passed');
+}

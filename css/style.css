@@ -399,3 +399,5 @@ body.bs-open { overflow: hidden; }
 }
 .setup-h { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 :root:fullscreen body, html:fullscreen { background: var(--bg); }
+.reslist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.reslist a { text-decoration: none; } .reslist a:hover b { text-decoration: underline; }
