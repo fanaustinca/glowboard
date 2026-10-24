@@ -313,7 +313,7 @@ ok('the pro coach now coaches t3 and t7 at once');
   const fsubmit = (db, eventId, teamId, round, uid, o) => { const id = `${eventId}_${teamId}_R${round}`; const b = writeBatch(db); b.set(doc(db, 'scores', id), fpayload(eventId, teamId, round, uid, o)); b.set(doc(db, 'signatures', id), { signature: sig, judgeUid: uid, createdAt: Date.now() }); return b.commit(); };
   await can('judge submits a Future score (above 1000)', fsubmit(judge, 'ev2', 't7', 1, 'u-judge'));
   await cannot('a made-up edition', fsubmit(judge, 'ev2', 't7', 2, 'u-judge', { edition: 'bogus' }));
-  await cannot('a total above 2000', fsubmit(judge, 'ev2', 't7', 2, 'u-judge', { total: 2001 }));
+  await cannot('a total above 5000', fsubmit(judge, 'ev2', 't7', 2, 'u-judge', { total: 5001 }));
   await can('a score with no edition field (data from before editions)', submit(judge, 'ev2', 't7', 3, 'u-judge'));
   await can('admin creates a Future team', setDoc(doc(admin, 'teams/t30'), { number: 30, name: 'Thirty', edition: 'future', createdBy: 'admin@x.com' }));
   await cannot('admin creates a team with a made-up edition', setDoc(doc(admin, 'teams/t31'), { number: 31, name: 'ThirtyOne', edition: 'bogus', createdBy: 'admin@x.com' }));

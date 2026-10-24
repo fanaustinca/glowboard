@@ -219,11 +219,11 @@ function futureOracle(r) {
   const young = clampN(m.f01.young, 3), grand = clampN(m.f01.grand, 3), hollow = clampN(m.f01.hollow, 3);
   let f01 = 20 * (young + grand + hollow);
   if (m.f01.queen === true && young >= 3) f01 += 40; // bonus: 3 species in the young forest + the queen knocked down
-  const f02 = 5 * clampN(m.f02.base, 50) + 10 * clampN(m.f02.canopy, 15);
+  const f02 = 5 * clampN(m.f02.base, 100) + 10 * clampN(m.f02.canopy, 15);
   const f03 = 5 * clampN(m.f03.cycled, 50);
   const f04 = (m.f04.species === true ? 30 : 0) + (m.f04.resources === true ? 20 : 0);
-  const f05 = 5 * clampN(m.f05.haven, 50);
-  const f06 = 20 * clampN(m.f06.added, 5) + 10 * clampN(m.f06.contained, 25);
+  const f05 = 5 * clampN(m.f05.haven, 100);
+  const f06 = 20 * clampN(m.f06.added, 5) + 10 * clampN(m.f06.contained, 100);
   const sum = f01 + f02 + f03 + f04 + f05 + f06;
   const p = clampN(r.penalties, 3);
   return p >= 3 ? 0 : Math.max(0, sum - [0, 10, 30][p]);

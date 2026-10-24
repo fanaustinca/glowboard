@@ -334,7 +334,9 @@ body.bs-open { overflow: hidden; }
 [data-theme="dark"] .badge.ed-future { background: #1b2b4a; color: #9bbcf2; }
 :root[data-theme="dark"] .badge.ed-future { background: #1b2b4a; color: #9bbcf2; }
 
-.slidr{display:flex;align-items:center;gap:.6rem;flex:1 1 12rem;min-width:0}
+.opt.cnt .lbl{flex:1 1 100%}
+.opt.cnt .ctl{display:flex;align-items:center;gap:.8rem;flex:1 1 100%;min-width:0}
+.slidr{display:flex;align-items:center;gap:.6rem;flex:1 1 auto;min-width:0}
 .slidr input[type=range]{flex:1;min-width:6rem}
 .slidr input[type=number]{width:4.2rem;text-align:center}
 

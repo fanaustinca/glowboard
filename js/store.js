@@ -349,10 +349,10 @@ class DemoStore {
     } else if (col === 'scores') {
       this.need((x) => this.judgeFor(x, data.eventId) || this.hostOf(x, data.eventId));
       if (ex) this.need(this.isAdmin);
-      else if (data.judgeUid !== u.uid || data.hasSignature !== true || ![2, 3, 4].includes(data.gp) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 2000) || !(data.edition === undefined || EDITION_IDS.includes(data.edition))) throw denied();
+      else if (data.judgeUid !== u.uid || data.hasSignature !== true || ![2, 3, 4].includes(data.gp) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 5000) || !(data.edition === undefined || EDITION_IDS.includes(data.edition))) throw denied();
       if (!this.db.events[data.eventId] || !this.db.teams[data.teamId] || ![1, 2, 3].includes(data.round) || id !== scoreId(data.eventId, data.teamId, data.round)) throw denied();
     } else if (col === 'practice') {
-      if (!this.onTeam(u, data.teamId) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 2000) || !(data.edition === undefined || EDITION_IDS.includes(data.edition))) throw denied();
+      if (!this.onTeam(u, data.teamId) || !(Number.isInteger(data.total) && data.total >= 0 && data.total <= 5000) || !(data.edition === undefined || EDITION_IDS.includes(data.edition))) throw denied();
       if (ex) { if (!this.onTeam(u, ex.teamId) || data.teamId !== ex.teamId || data.uid !== ex.uid || data.createdAt !== ex.createdAt) throw denied(); }
       else if (data.uid !== u.uid) throw denied();
     } else throw denied();

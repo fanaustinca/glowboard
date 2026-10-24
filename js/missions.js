@@ -198,7 +198,7 @@ export const EVENT_EDITION_CHOICES = [
 
 // The rulebook gives no limit for these piles (only the “max” printed on the scoresheet), so the counters stop at a
 // size that no real match can reach.
-export const FUTURE_COUNTS = { microbiome: 3, young: 3, canopy: 15, waterfall: 50, base: 50, haven: 50, invasiveAdded: 5, containment: 25 };
+export const FUTURE_COUNTS = { microbiome: 3, young: 3, canopy: 15, waterfall: 50, base: 100, haven: 100, invasiveAdded: 5, containment: 100 };
 // Interference penalties: 1st = −10, 2nd = −30 in total, 3rd = the match score is zero.
 export const FUTURE_PENALTIES = [
   { v: 0, label: '0', pts: 0 }, { v: 1, label: '1', pts: -10 }, { v: 2, label: '2', pts: -30 }, { v: 3, label: '3+', pts: null },
