@@ -12,7 +12,7 @@
 export const SCHEDULE_DEFAULTS = { rounds: 3, tables: 4, start: '09:00', interval: 10, breakMin: 15 };
 export const LIMITS = { rounds: [1, 8], tables: [1, 24], interval: [3, 60], breakMin: [0, 120] };
 
-function rng(seed) { let s = seed >>> 0 || 1; return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; }
+function rng(seed) { let s = seed >>> 0 || 1; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 const shuffle = (arr, rand) => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
 // With exactly two tables they are called A and B; otherwise 1, 2, 3…
@@ -34,19 +34,45 @@ export function fmtTime(startHHMM, minutesFromStart) {
 // them to different slots; "mixed" re-deals the groups each round so teams meet new opponents. Table numbers rotate each round.
 function build(teamIds, cfg, rand, mixed) {
   const T = cfg.tables, S = Math.ceil(teamIds.length / T);
-  const deal = () => { const base = shuffle(teamIds, rand); return Array.from({ length: S }, (_, g) => base.slice(g * T, g * T + T)); };
+  const met = new Map(); // "a|b" -> rounds those two already shared a slot
+  const key = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  let prevLast = [];
+  const deal = () => {
+    const base = shuffle(teamIds, rand);
+    if (!mixed) return Array.from({ length: S }, (_, g) => base.slice(g * T, g * T + T));
+    // random order, each team joins the group with room where it has met the fewest of its members (ties random)
+    const groups = Array.from({ length: S }, () => []);
+    for (const id of base) {
+      let bestG = [], bestC = Infinity;
+      groups.forEach((g, gi) => {
+        if (g.length >= T) return;
+        // nobody from the previous round's last slot opens this round (no back-to-back across the break)
+        if (gi === 0 && S > 1 && prevLast.includes(id) && groups.some((o, oi) => oi > 0 && o.length < T)) return;
+        const c = g.reduce((n, o) => n + (met.get(key(id, o)) || 0), 0);
+        if (c < bestC) { bestC = c; bestG = [gi]; } else if (c === bestC) bestG.push(gi);
+      });
+      groups[bestG[Math.floor(rand() * bestG.length)]].push(id);
+    }
+    for (const g of groups) for (let i = 0; i < g.length; i++) for (let j = i + 1; j < g.length; j++) met.set(key(g[i], g[j]), (met.get(key(g[i], g[j])) || 0) + 1);
+    prevLast = groups[S - 1];
+    return groups.map((g) => shuffle(g, rand));
+  };
   const fixed = mixed ? null : deal();
   const step = S >= 3 ? S - 1 : 0;
   const used = new Map(); // teamId -> table numbers already played
   return Array.from({ length: cfg.rounds }, (_, r) => (mixed ? deal() : fixed).flatMap((group, g) => {
-    const free = shuffle(Array.from({ length: T }, (_, i) => i + 1), rand);
+    let tables = null;
+    if (mixed) { // best of several random table assignments for this group: fewest tables a team already used
+      let bestCost = Infinity;
+      for (let k = 0; k < 60 && bestCost > 0; k++) {
+        const pick = shuffle(Array.from({ length: T }, (_, i) => i + 1), rand);
+        const cost = group.reduce((n, id, i) => n + (used.get(id) || []).filter((x) => x === pick[i]).length, 0);
+        if (cost < bestCost) { bestCost = cost; tables = pick; }
+      }
+    }
     return group.map((teamId, i) => {
       const seen = used.get(teamId) || used.set(teamId, []).get(teamId);
-      let table;
-      if (mixed) { // a table this team has not used yet (least-used when all have been)
-        table = free.slice().sort((a, b) => seen.filter((x) => x === a).length - seen.filter((x) => x === b).length)[0];
-        free.splice(free.indexOf(table), 1);
-      } else table = ((i + r) % T) + 1;
+      const table = mixed ? tables[i] : ((i + r) % T) + 1;
       seen.push(table);
       return { round: r + 1, slotInRound: mixed ? g : (g + step * r) % S, table, teamId };
     });
@@ -79,7 +105,8 @@ function evaluate(rounds, N, T) {
   for (const n of together.values()) rematches += n - 1;
   return { minGap: Number.isFinite(minGap) ? minGap : Infinity, repeats, rematches };
 }
-const better = (a, b) => (a.minGap !== b.minGap ? a.minGap > b.minGap : a.rematches !== b.rematches ? a.rematches < b.rematches : a.repeats < b.repeats);
+// No back-to-back matches (a gap of 2+ slots) comes first, then varied opponents, then table changes.
+const better = (a, b) => { const ga = Math.min(a.minGap, 2), gb = Math.min(b.minGap, 2); return ga !== gb ? ga > gb : a.rematches !== b.rematches ? a.rematches < b.rematches : a.repeats < b.repeats; };
 
 export function generateSchedule(teamIds, config = {}, seed = 1) {
   const cfg = clampConfig(config);
@@ -89,9 +116,9 @@ export function generateSchedule(teamIds, config = {}, seed = 1) {
   const S = Math.ceil(N / cfg.tables);
   const rand = rng(seed * 7919 + 1);
   let best = null;
-  // keep the best of the fixed-group layout (which guarantees rest between matches) and many re-dealt layouts
-  for (let i = 0; i < 400; i++) {
-    const cand = build(ids, cfg, rand, i > 0 && N > cfg.tables && cfg.rounds > 1);
+  // many re-dealt layouts; the best (rested, fewest repeat opponents) wins
+  for (let i = 0; i < Math.max(100, Math.min(1500, Math.floor(30000 / (N * cfg.rounds)))); i++) {
+    const cand = build(ids, cfg, rand, N > cfg.tables && cfg.rounds > 1);
     const ev = evaluate(cand, N, cfg.tables);
     if (!best || better(ev, best.ev)) best = { cand, ev };
   }

@@ -45,7 +45,7 @@ test('nobody plays back-to-back across rounds when each round has ≥ 3 slots', 
 });
 test('typical event: 24 teams, 4 tables, 3 rounds → 6 slots/round, healthy rest gaps, tables rotate', () => {
   const s = generateSchedule(ids(24), { rounds: 3, tables: 4 }, 5);
-  assert.equal(s.stats.slotsPerRound, 6); assert.equal(s.stats.totalSlots, 18); assert.ok(s.stats.minGap >= 3, 'min gap ' + s.stats.minGap);
+  assert.equal(s.stats.slotsPerRound, 6); assert.equal(s.stats.totalSlots, 18); assert.ok(s.stats.minGap >= 2, 'min gap ' + s.stats.minGap);
   assert.equal(s.stats.tableRepeats, 0, 'no team uses the same table twice');
 });
 test('times: start + interval per slot + break between rounds', () => {
@@ -88,3 +88,9 @@ console.log(`\n${passed} schedule checks passed`);
   assert.equal(s.stats.tableRepeats <= 2, true, `table repeats stay low (${s.stats.tableRepeats})`);
   console.log('schedule: A/B tables and mixed opponents ok');
 }
+test('opponents vary: 24 teams / 4 tables / 3 rounds rarely repeat a pairing, and seeds give different groupings', () => {
+  const pairs = (s) => { const by = {}; s.rows.forEach((r) => (by[r.slot] ||= []).push(r.teamId)); return Object.values(by).flatMap((g) => g.flatMap((a, i) => g.slice(i + 1).map((b) => [a, b].sort().join('|')))); };
+  const a = generateSchedule(ids(24), { rounds: 3, tables: 4 }, 11), b = generateSchedule(ids(24), { rounds: 3, tables: 4 }, 12);
+  const pa = pairs(a); assert.ok(pa.length - new Set(pa).size <= 3, 'repeat pairings ' + (pa.length - new Set(pa).size));
+  assert.notDeepEqual(pairs(a).sort(), pairs(b).sort());
+});
