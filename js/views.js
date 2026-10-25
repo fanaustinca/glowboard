@@ -886,7 +886,7 @@ export function eventView(root, ctx) {
   function editorHTML(sch, evTeams) {
     const T = sch.config.tables, opts = (sel) => `<option value="">—</option>${evTeams.slice().sort((a, b) => a.number - b.number).map((t) => `<option value="${esc(t.id)}" ${t.id === sel ? 'selected' : ''}>#${esc(t.number)} ${esc(t.name)}</option>`).join('')}`;
     return groupSchedule(sch.rows).map((g) => `<h3>Round ${g.round}</h3><div class="table-scroll"><table class="data sched"><thead><tr><th>Time</th>${Array.from({ length: T }, (_, i) => `<th>Table ${tableLabel(i + 1, T)}</th>`).join('')}</tr></thead><tbody>
-      ${g.slots.map((sl) => `<tr><th scope="row">${esc(sl.time)}</th>${Array.from({ length: T }, (_, i) => `<td><select data-cell="${sl.slot}|${i + 1}" aria-label="Round ${g.round} ${esc(sl.time)} table ${tableLabel(i + 1, T)}">${opts(sl.tables[i + 1])}</select></td>`).join('')}</tr>`).join('')}</tbody></table></div>`).join('');
+      ${g.slots.map((sl) => `<tr><th scope="row"><input type="time" class="sched-time" data-slottime="${sl.slot}" value="${esc(sl.time)}" aria-label="Round ${g.round} slot ${sl.slot} time"></th>${Array.from({ length: T }, (_, i) => `<td><select data-cell="${sl.slot}|${i + 1}" aria-label="Round ${g.round} ${esc(sl.time)} table ${tableLabel(i + 1, T)}">${opts(sl.tables[i + 1])}</select></td>`).join('')}</tr>`).join('')}</tbody></table></div>`).join('');
   }
   function schedBlock(sch, ev, evTeams) {
     const st = sch.stats || {};
@@ -901,13 +901,20 @@ export function eventView(root, ctx) {
         <button class="btn ghost" id="e-csv" type="button">Download CSV</button>
         <button class="btn ghost" id="e-copy" type="button">Copy for Google Sheets</button>
         ${!draft && ev.schedule ? '<button class="btn ghost danger" id="e-clear" type="button">Unpublish schedule</button>' : ''}</div>
-      ${editing ? `<p class="muted small">Pick a team for any time and table. Changes are a preview until you press Publish schedule.</p>${issues.length ? `<ul class="issues">${issues.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : '<p class="muted small">✓ Every team plays each round once.</p>'}${editorHTML(sch, evTeams)}` : scheduleTableHTML(sch, evTeams)}`;
+      ${editing ? `<p class="muted small">Pick a team for any table, or edit a row’s start time. Changes are a preview until you press Publish schedule.</p>${issues.length ? `<ul class="issues">${issues.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : '<p class="muted small">✓ Every team plays each round once.</p>'}${editorHTML(sch, evTeams)}` : scheduleTableHTML(sch, evTeams)}`;
   }
   const readCfg = () => clampConfig({ rounds: root.querySelector('#c-rounds').value, tables: root.querySelector('#c-tables').value, start: root.querySelector('#c-start').value, interval: root.querySelector('#c-interval').value, breakMin: root.querySelector('#c-break').value });
   const exportTable = () => { const ev = cur(); return scheduleTable(draft || ev.schedule, eventTeams(ev, ctx.teams()), ev.name); };
 
 
   host.addEventListener('change', (e) => {
+    const st = e.target.dataset?.slottime;
+    if (st && draft && e.target.value) {
+      const slot = Number(st);
+      for (const r of draft.rows) if (r.slot === slot) r.time = e.target.value;
+      const box = host.querySelector('#e-sched'); const ev = cur(); if (box) box.innerHTML = schedBlock(draft, ev, eventTeams(ev, ctx.teams()));
+      return;
+    }
     const c = e.target.dataset?.cell; if (!c || !draft) return;
     const [slot, tableNo] = c.split('|').map(Number), T = draft.config.tables;
     const row = draft.rows.find((r) => r.slot === slot && r.tableNo === tableNo);

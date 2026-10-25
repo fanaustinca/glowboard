@@ -390,6 +390,7 @@ body.bs-open { overflow: hidden; }
 .evchips button small { opacity: .8; font-weight: 500; }
 .issues { color: var(--danger); margin: .3rem 0; padding-left: 1.2rem; }
 .sched select { max-width: 11rem; font: inherit; }
+.sched-time { max-width: 9rem; font: inherit; font-weight: 700; min-height: 40px; }
 /* print: the schedule only */
 @media print {
   header, nav, .toolbar, #modebar, footer, .row-actions, .btn, .bs { display: none !important; }
