@@ -335,7 +335,7 @@ service cloud.firestore {
     }
 
     // ── Live help chat ─────────────────────────────────────────────────────────────────────────
-    // Anyone (signed in or not) can ask for help. A conversation lives at helpThreads/{threadId}; the id is a long random
+    // Any signed-in user (Google or team password) can ask for help; guests are pointed at an email address. A conversation lives at helpThreads/{threadId}; the id is a long random
     // string kept in the asker's browser, so only they (and admins) can find it: `get` is open, `list` is admin-only.
     // Only admins reply (from == 'admin') and only admins can delete or resolve.
     function validHelpId(tid) { return tid.size() >= 20 && tid.size() <= 48; }
@@ -346,7 +346,7 @@ service cloud.firestore {
     match /helpThreads/{tid} {
       allow get: if true;
       allow list: if isAdmin();
-      allow create: if validHelpId(tid)
+      allow create: if request.auth != null && validHelpId(tid)
         && request.resource.data.keys().hasOnly(['name', 'contact', 'email', 'createdAt', 'lastAt', 'lastFrom', 'last', 'resolved'])
         && request.resource.data.name is string && request.resource.data.name.size() <= 60
         && request.resource.data.contact is string && request.resource.data.contact.size() <= 80
@@ -355,7 +355,7 @@ service cloud.firestore {
         && request.resource.data.lastFrom == 'user' && request.resource.data.resolved == false
         && request.resource.data.last is string && request.resource.data.last.size() <= 100;
       allow update: if isAdmin()
-        || (validHelpId(tid)
+        || (request.auth != null && validHelpId(tid)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'contact', 'email', 'lastAt', 'lastFrom', 'last', 'resolved'])
           && request.resource.data.name is string && request.resource.data.name.size() <= 60
           && request.resource.data.contact is string && request.resource.data.contact.size() <= 80
@@ -366,7 +366,7 @@ service cloud.firestore {
 
       match /msgs/{mid} {
         allow get, list: if true;
-        allow create: if validHelpId(tid)
+        allow create: if request.auth != null && validHelpId(tid)
           && request.resource.data.keys().hasOnly(['from', 'text', 'createdAt'])
           && helpText(request.resource.data.text) && request.resource.data.createdAt is int
           && ((request.resource.data.from == 'user') || (request.resource.data.from == 'admin' && isAdmin()));

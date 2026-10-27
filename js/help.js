@@ -15,7 +15,7 @@ export function helpSections(u, scoreable = []) {
     '<b>Resources</b> links to the Founders and Future rulebooks, scoresheets and referee training. It is open to everyone.',
     '<b>Sample team</b> has made-up practice runs so you can try the Stats and Advanced tools. It is read-only.',
     '<b>Teams → Register a team</b> lets anyone add their team with its number, name and coach Gmail to track practice runs. A new registration is <b>unofficial</b> until an event host or admin adds it to an event.',
-    '<b>Live help</b> (below) lets you message the admins with a question. You don’t need to sign in.',
+    '<b>Live help</b> (below) lets signed-in users message the admins with a question. Not signed in? Email fanaustinca@gmail.com.',
   ]));
   if (!u) {
     out.push(sec('Signing in', 'Sign in (top right)', [
@@ -77,13 +77,14 @@ export function helpSections(u, scoreable = []) {
 
 // ---- live chat ----
 const TID_KEY = 'glowboard-help-thread';
-const POLL_MIN = 15000, POLL_SPAN = 15000; // refresh every 15–30 seconds
-const nextDelay = () => POLL_MIN + Math.random() * POLL_SPAN;
+const SUPPORT_EMAIL = 'fanaustinca@gmail.com';
+const POLL_MS = 60000; // refresh once a minute, only while the Help page is open
+const nextDelay = () => POLL_MS;
 const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
 const when = (t) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-// Calls fn now and then every 15–30 s (only while the tab is visible). Returns a stop function.
+// Calls fn now and then once a minute (only while the tab is visible). Returns a stop function.
 function poll(fn) {
   let stopped = false, timer = null;
   const run = async () => { if (!document.hidden) { try { await fn(); } catch { /* offline: try again next time */ } } if (!stopped) timer = setTimeout(run, nextDelay()); };
@@ -101,7 +102,7 @@ function mountAsk(el, store, user) {
   const saved = (() => { try { return JSON.parse(lsGet(TID_KEY + '-who')) || {}; } catch { return {}; } })();
   el.innerHTML = `<section class="card chat" id="chat">
     <h2>Live help</h2>
-    <p class="muted">Ask the event staff a question — no sign-in needed. Text only, and please don’t share passwords. An admin will reply here; this page checks for replies every 15–30 seconds.</p>
+    <p class="muted">Ask the event staff a question. Text only, and please don’t share passwords. An admin will reply here; this page checks for replies once a minute while it is open.</p>
     <div class="chat-log" id="chat-log" aria-live="polite" aria-label="Conversation"><p class="empty">No messages yet.</p></div>
     <form id="chat-form" class="chat-form">
       <div class="row2">
@@ -136,7 +137,7 @@ function mountAsk(el, store, user) {
 
 function mountInbox(el, store) {
   el.innerHTML = `<section class="card chat" id="inbox"><h2>Give help</h2>
-    <p class="where">Where: Help (this page). Messages from anyone — signed in or not — appear here. Only admins can reply.</p>
+    <p class="where">Where: Help (this page). Messages from signed-in users appear here. Only admins can reply.</p>
     <div class="inbox"><ul class="threads" id="in-list" aria-label="Conversations"></ul>
       <div class="thread" id="in-thread"><p class="empty">Pick a conversation.</p></div></div></section>`;
   const $ = (q) => el.querySelector(q);
@@ -201,7 +202,8 @@ export function helpView(root, ctx) {
       <div class="help">${helpSections(u, ctx.scoringEvents()).join('')}</div>`;
     root.querySelector('#help-chat').innerHTML = ''; root.querySelector('#help-inbox').innerHTML = '';
     if (u?.role === 'admin') stops.push(mountInbox(root.querySelector('#help-inbox'), ctx.store));
-    else stops.push(mountAsk(root.querySelector('#help-chat'), ctx.store, u));
+    else if (u) stops.push(mountAsk(root.querySelector('#help-chat'), ctx.store, u));
+    else root.querySelector('#help-chat').innerHTML = `<section class="card chat" id="chat-guest"><h2>Live help</h2><p class="muted">Live chat is for signed-in users. <a href="#/login">Sign in</a> to ask the event staff, or email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>.</p></section>`;
   };
   draw();
   return { update: draw, destroy: () => stops.forEach((f) => f()) };

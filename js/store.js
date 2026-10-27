@@ -338,6 +338,8 @@ class DemoStore {
     run();
     return () => this.listeners.delete(run);
   }
+  // Live lists for the app pages. (The local demo data is instant, so this is just subscribe.)
+  watch(col, cb) { return this.subscribe(col, cb); }
   async put(col, id, data) {
     const u = this.user, ex = this.db[col][id];
     if (col === 'access') {
@@ -460,6 +462,7 @@ class DemoStore {
   async helpSend(tid, { name = '', contact = '', text }) {
     const d = this.helpDb(), u = this.user, now = Date.now();
     text = String(text || '').trim().slice(0, HELP_MAX);
+    if (!u) throw denied('Sign in to use live help.');
     if (!text || !validHelpId(tid)) throw denied('Write a message first.');
     const t = d.helpThreads[tid];
     const info = { name: String(name).trim().slice(0, 60), contact: String(contact).trim().slice(0, 80), email: u?.email || '' };
@@ -498,7 +501,7 @@ class DemoStore {
 // ───────────────────────────── Firebase backend ─────────────────────────────
 class FirebaseStore {
   mode = 'firebase';
-  constructor() { this.cur = null; this.authListeners = new Set(); }
+  constructor() { this.cur = null; this.authListeners = new Set(); this.watchers = new Set(); }
   async init() {
     const base = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}`;
     const [app, auth, fs] = await Promise.all([
@@ -703,6 +706,23 @@ class FirebaseStore {
     this.detach();
     await this.sdk.auth.signOut(this.auth);
   }
+  // Public lists (teams, events, scores) are fetched, not streamed: now, then once a minute while the page that shows them is
+  // open and the browser tab is visible. `once` fetches a single time. Our own writes refresh the open lists straight away.
+  watch(col, cb, { every = 60000, once = false } = {}) {
+    const { fs } = this.sdk;
+    let stopped = false, timer = null, busy = false;
+    const run = async () => {
+      if (stopped || busy) return; busy = true;
+      try { const snap = await fs.getDocs(fs.collection(this.fdb, col)); if (!stopped) cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); } catch (e) { console.warn(`[firestore] ${col}:`, e.code); } finally { busy = false; }
+    };
+    const loop = () => { if (stopped || once) return; timer = setTimeout(async () => { if (!document.hidden) await run(); loop(); }, every); };
+    const onVisible = () => { if (!document.hidden && !once) run(); };
+    document.addEventListener('visibilitychange', onVisible);
+    this.watchers.add(run);
+    run(); loop();
+    return () => { stopped = true; clearTimeout(timer); this.watchers.delete(run); document.removeEventListener('visibilitychange', onVisible); };
+  }
+  kick() { this.watchers.forEach((r) => r()); }
   subscribe(col, cb) {
     const { fs } = this.sdk;
     const u = this.cur;
@@ -747,10 +767,12 @@ class FirebaseStore {
     const { fs } = this.sdk;
     const { id: _drop, ...rest } = data;
     try { await fs.setDoc(fs.doc(this.fdb, col, id), rest); } catch (e) { throw friendly(e); }
+    this.kick();
   }
   async patch(col, id, fields) {
     const { fs } = this.sdk;
     try { await fs.updateDoc(fs.doc(this.fdb, col, id), fields); } catch (e) { throw friendly(e); }
+    this.kick();
   }
   async submitScore(doc, signature) {
     const { fs } = this.sdk;
@@ -761,6 +783,7 @@ class FirebaseStore {
       b.set(fs.doc(this.fdb, 'scores', id), { ...rest, hasSignature: true });
       b.set(fs.doc(this.fdb, 'signatures', id), { signature, judgeUid: doc.judgeUid, createdAt: doc.createdAt });
       await b.commit();
+      this.kick();
     } catch (e) {
       if (e.code !== 'permission-denied') throw friendly(e);
       let exists = false; try { exists = (await fs.getDoc(fs.doc(this.fdb, 'scores', id))).exists(); } catch { /* ignore */ }
@@ -776,6 +799,7 @@ class FirebaseStore {
   async remove(col, id) {
     if (col === 'scores') { try { await this.sdk.fs.deleteDoc(this.sdk.fs.doc(this.fdb, 'signatures', id)); } catch { /* may not exist */ } }
     try { await this.sdk.fs.deleteDoc(this.sdk.fs.doc(this.fdb, col, id)); } catch (e) { throw friendly(e); }
+    this.kick();
   }
 
   // ----- live help chat -----

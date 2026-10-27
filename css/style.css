@@ -404,3 +404,5 @@ body.bs-open { overflow: hidden; }
 :root:fullscreen body, html:fullscreen { background: var(--bg); }
 .reslist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .reslist a { text-decoration: none; } .reslist a:hover b { text-decoration: underline; }
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.field.search{margin:.6rem 0}

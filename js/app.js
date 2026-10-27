@@ -34,6 +34,22 @@ const phone = matchMedia('(max-width: 719px)');
 const MAX_TABS = 5; // bottom tabs on a phone; anything beyond goes under "More"
 
 const main = document.getElementById('main');
+// Live lists (teams, events, scores) refresh once a minute and only while a page that shows them is open. Every page gets
+// teams and events once; the live pages poll all three; the Teams page loads the official scores once and then leaves them alone.
+const LIVE = new Set(['', 'schedule', 'judge', 'event', 'admin']);
+const SCORES_ONCE = new Set(['team', 'practice', 'stats', 'analytics']);
+let watching = {};
+function syncWatches(key) {
+  const live = LIVE.has(key);
+  const want = { teams: live ? 'live' : 'once', events: live ? 'live' : 'once', scores: live ? 'live' : SCORES_ONCE.has(key) ? 'once' : null };
+  for (const col of ['teams', 'events', 'scores']) {
+    const w = watching[col];
+    if (w && w.mode === want[col] && want[col] === 'live') continue; // already polling
+    w?.stop(); delete watching[col];
+    if (!want[col]) continue;
+    watching[col] = { mode: want[col], stop: store.watch(col, (r) => { data[col] = r; refresh(); }, { once: want[col] === 'once' }) };
+  }
+}
 let store, data = { teams: [], scores: [], events: [], eventHosts: [], eventJudges: [] }, current = null, ctx;
 
 async function boot() {
@@ -47,9 +63,7 @@ async function boot() {
     scoringEvents: () => scoringEvents(store.user, data.events, data.eventHosts, data.eventJudges),
     user: () => store.user, go: (h) => { location.hash = h; }, afterLogin: '#/',
   };
-  store.subscribe('teams', (r) => { data.teams = r; refresh(); });
-  store.subscribe('scores', (r) => { data.scores = r; refresh(); });
-  store.subscribe('events', (r) => { data.events = r; refresh(); });
+  watching = {};
   let lastRole, lastTeam, lastUid, unsubHosts = null, unsubJudges = null;
   store.onAuth((u) => {
     if ((u?.uid ?? null) !== lastUid) { // (re)subscribe the per-person lists only when the person changes, not on every team update
@@ -117,6 +131,7 @@ function route() {
   const key = (location.hash.replace(/^#\/?/, '') || '').split('?')[0];
   const r = ROUTES[key] || ROUTES[''];
   if (key && !ROUTES[key]) ctx.go('#/');
+  syncWatches(ROUTES[key] ? key : '');
   main.innerHTML = '';
   const el = document.createElement('div'); el.className = 'page'; main.append(el);
   current = r.view(el, ctx) || {};
