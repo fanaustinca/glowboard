@@ -231,8 +231,18 @@ class DemoStore {
     const e = normEmail(email);
     if (!this.db.access[e]) throw err('not-authorized', `${e} isn’t on the access list. Ask your coach or an admin to add this Google account.`);
     this.setSession(e);
+    this.claimRegistrations(e);
     await this.syncLocalTeams();
     this.emitAuth();
+  }
+  // The Gmail named in a public registration becomes that (still unofficial) team's coach as soon as they sign in.
+  claimRegistrations(email) {
+    for (const r of Object.values(this.db.registrations)) {
+      if (r.coachEmail !== email || !this.db.teams[r.id]?.registered) continue;
+      const id = rosterId(r.id, email);
+      if (!this.db.roster[id]) this.db.roster[id] = { id, teamId: r.id, email, role: 'coach', name: '', addedBy: email, addedAt: Date.now() };
+    }
+    this.persist();
   }
   setActiveTeam(teamId) { setActivePref(teamId); this.emitAuth(); }
   // Add a team with its shared password. Stored on this device and — signed in with Google — linked to the account.
@@ -315,7 +325,7 @@ class DemoStore {
       let rows = Object.values(this.db[col] || {});
       if (col === 'signatures') rows = [];
       if (col === 'teamSecrets') rows = [];
-      if (col === 'registrations') rows = this.isAdmin(u) || this.isHost(u) ? rows : [];
+      if (col === 'registrations') rows = this.isAdmin(u) || this.isHost(u) ? rows : rows.filter((r) => u?.email && r.coachEmail === u.email);
       if (col === 'teamMembers') rows = this.isAdmin(u) ? rows : rows.filter((r) => u && (r.uid === u.uid || this.coachOf(u, r.teamId)));
       if (col === 'roster') rows = this.isAdmin(u) ? rows : rows.filter((r) => u?.email && (r.email === u.email || this.coachOf(u, r.teamId)));
       if (col === 'eventJudges') rows = this.isAdmin(u) ? rows : rows.filter((r) => u && (r.emails || []).includes(u.email));
@@ -532,6 +542,7 @@ class FirebaseStore {
     const promise = (async () => {
       const base = await this.fetchProfile(fu);
       if (!base) return null;
+      if (base.email) await this.claimRegistrations(base.email);
       this.base = base; this.rows = { roster: [], pw: [] };
       const recompute = () => { this.cur = composeUser(this.base, this.rows.roster, this.rows.pw); };
       await new Promise((resolve) => {
@@ -561,6 +572,18 @@ class FirebaseStore {
     const forget = () => { if (this.attached?.promise === promise) this.attached = null; };
     promise.then((p) => { if (!p) forget(); }, forget); // (a failed or refused sign-in can be retried)
     return promise;
+  }
+  // The Gmail named in a public registration becomes that (still unofficial) team's coach once they sign in with it.
+  async claimRegistrations(email) {
+    const { fs } = this.sdk;
+    try {
+      const regs = await fs.getDocs(fs.query(fs.collection(this.fdb, 'registrations'), fs.where('coachEmail', '==', email)));
+      for (const r of regs.docs) {
+        const rid = rosterId(r.id, email);
+        if ((await fs.getDoc(fs.doc(this.fdb, 'roster', rid))).exists()) continue;
+        await fs.setDoc(fs.doc(this.fdb, 'roster', rid), { teamId: r.id, email, role: 'coach', name: '', addedBy: email, addedAt: Date.now() }).catch(() => {});
+      }
+    } catch { /* not claimable (rules not published yet, or nothing to claim) */ }
   }
   detach() { (this.unsubs || []).forEach((f) => f()); this.unsubs = []; this.attached = null; this.base = null; }
   // A team-password membership is stale once the coach changed or switched off the password: delete it.

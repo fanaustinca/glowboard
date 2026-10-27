@@ -168,7 +168,12 @@ service cloud.firestore {
         && request.resource.data.addedBy == request.auth.token.email
         && exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId))
         && (isAdmin() || coachOf(request.resource.data.teamId)
-          || (teamCreator(request.resource.data.teamId) && request.resource.data.role == 'coach'));
+          || (teamCreator(request.resource.data.teamId) && request.resource.data.role == 'coach')
+          // the coach Gmail a public registration named may claim that (still unofficial) team for themselves
+          || (request.resource.data.role == 'coach' && request.resource.data.email == request.auth.token.email
+            && exists(/databases/$(database)/documents/registrations/$(request.resource.data.teamId))
+            && get(/databases/$(database)/documents/registrations/$(request.resource.data.teamId)).data.coachEmail == request.auth.token.email
+            && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.get('registered', false) == true));
       // Admins may change anyone's role on any team (promote to coach / make a member) but not move or re-key the entry.
       allow update: if (isAdmin()
           && request.resource.data.teamId == resource.data.teamId && request.resource.data.email == resource.data.email
@@ -268,9 +273,9 @@ service cloud.firestore {
     }
 
     // The private half of a public registration (the coach's email). Written once, together with the team; read by admins
-    // and hosts, who verify the team.
+    // and hosts, who verify the team, and by the coach whose Gmail it is.
     match /registrations/{teamId} {
-      allow read: if isAdmin() || isHostAny();
+      allow read: if isAdmin() || isHostAny() || (signedIn() && resource.data.coachEmail == request.auth.token.email);
       allow create: if request.auth != null && (isAnon() || signedIn())
         && !exists(/databases/$(database)/documents/teams/$(teamId))
         && request.resource.data.keys().hasOnly(['coachEmail', 'uid', 'createdAt'])

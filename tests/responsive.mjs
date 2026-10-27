@@ -740,6 +740,11 @@ await check('public registration: anyone registers an unofficial team (number, c
   await page.keyboard.press('Escape'); await wait(100);
   await page.waitForFunction(() => document.querySelector('#tm-list')?.textContent.includes('Public FC'));
   assert.match(await text(page, '#tm-list'), /Unofficial/);
+  await register('9102', 'Coach Claim', 'coach@demo.test'); await page.waitForSelector('dialog[open] code'); await page.keyboard.press('Escape'); await wait(100);
+  await page.evaluate(() => document.getElementById('signout').click()); await wait(150);
+  await login(page, 'coach@demo.test'); await goHash(page, 'team');
+  assert.match(await text(page, '#tm-list'), /Coach Claim/, 'the coach Gmail named in a registration gets that team when they sign in'); assert.match(await text(page, '#tm-list'), /Coach/);
+  await page.evaluate(() => document.getElementById('signout').click()); await wait(150);
   await register('9101', 'Second Pub', 'pub2@gmail.com'); await page.waitForSelector('dialog[open] code'); await page.keyboard.press('Escape'); await wait(100);
   await goHash(page, ''); assert.doesNotMatch(await text(page, 'main'), /Public FC/, 'unofficial teams stay off the public standings');
   await page.evaluate(() => document.getElementById('signout').click()); await wait(150);

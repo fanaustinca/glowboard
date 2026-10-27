@@ -376,6 +376,14 @@ ok('the pro coach now coaches t3 and t7 at once');
     await cannot('a host cannot flip it to unofficial=true on an official team', updateDoc(doc(host, 'teams/t32'), { registered: true }));
     await can('a host verifies it (registered → false)', updateDoc(doc(host, 'teams/t9101'), { registered: false }));
     await cannot('…and cannot do it twice / change it back', updateDoc(doc(host, 'teams/t9101'), { registered: true }));
+    await can('a registration naming a coach with an account', rb(anon1, 'anon-1', 9109, { reg: { coachEmail: 'coach2@x.com' } }));
+    await can('that coach reads their registration', getDoc(doc(coach2, 'registrations/t9109'))); await cannot('another member cannot read it', getDoc(doc(mem, 'registrations/t9109')));
+    await cannot('another account cannot claim the team', setDoc(doc(judge, 'roster/t9109__judge@x.com'), { teamId: 't9109', email: 'judge@x.com', role: 'coach', name: '', addedBy: 'judge@x.com', addedAt: 1 }));
+    await cannot('the named coach cannot claim it as a member-less different email', setDoc(doc(coach2, 'roster/t9109__other@x.com'), { teamId: 't9109', email: 'other@x.com', role: 'coach', name: '', addedBy: 'coach2@x.com', addedAt: 1 }));
+    await can('the named coach claims the unofficial team (becomes its coach)', setDoc(doc(coach2, 'roster/t9109__coach2@x.com'), { teamId: 't9109', email: 'coach2@x.com', role: 'coach', name: '', addedBy: 'coach2@x.com', addedAt: 1 }));
+    await can('…and can then see its password', getDoc(doc(coach2, 'teamSecrets/t9109')));
+    await can('a host verifies it too', updateDoc(doc(host, 'teams/t9109'), { registered: false }));
+    await cannot('after verification the claim route is closed (admins add coaches)', setDoc(doc(coach2, 'roster/t9109__coach2@x.com'), { teamId: 't9109', email: 'coach2@x.com', role: 'coach', name: 'again', addedBy: 'coach2@x.com', addedAt: 2 }));
     await can('an admin deletes a registration', deleteDoc(doc(admin, 'registrations/t9101'))); await cannot('a host cannot delete one', deleteDoc(doc(host, 'registrations/t9101')));
     ok('public registration: anyone registers a new flagged team once; the coach email stays private; only a host/admin can verify it');
   }
