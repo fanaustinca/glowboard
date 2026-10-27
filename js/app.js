@@ -62,6 +62,7 @@ async function boot() {
     eventJudges: () => data.eventJudges,
     scoringEvents: () => scoringEvents(store.user, data.events, data.eventHosts, data.eventJudges),
     user: () => store.user, go: (h) => { location.hash = h; }, afterLogin: '#/',
+    logEvent: (name, params) => store.logEvent?.(name, params),
   };
   watching = {};
   let lastRole, lastTeam, lastUid, unsubHosts = null, unsubJudges = null;
@@ -83,6 +84,18 @@ async function boot() {
   window.addEventListener('hashchange', route);
   document.getElementById('signout').addEventListener('click', async () => { await store.signOut(); ctx.go('#/'); });
   document.getElementById('theme').addEventListener('click', toggleTheme);
+  const trackNav = (a) => {
+    if (!a) return;
+    const href = a.getAttribute('href') || '';
+    const key = (href.replace(/^#\/?/, '') || '').split('?')[0];
+    const r = ROUTES[key] || ROUTES[''];
+    store.logEvent?.('nav_click', {
+      nav_item: r?.label || a.textContent.trim(),
+      nav_destination: key || 'standings',
+    });
+  };
+  document.getElementById('nav')?.addEventListener('click', (e) => trackNav(e.target.closest('a')));
+  document.querySelector('.brand')?.addEventListener('click', (e) => trackNav(e.target.closest('a')));
   applyTheme();
   renderChrome();
   route();
@@ -139,6 +152,11 @@ function route() {
   window.scrollTo(0, 0);
   main.focus({ preventScroll: true });
   document.title = `${r.label === 'Standings' ? 'Live standings' : r.label} · GlowBoard`;
+  store.logEvent?.('page_view', {
+    page_title: document.title,
+    page_location: location.href,
+    page_path: location.hash || '#/',
+  });
 }
 
 document.getElementById('season').textContent = `${SEASON.name} ${SEASON.years}`;

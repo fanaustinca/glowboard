@@ -496,6 +496,7 @@ class DemoStore {
   }
   async resetDemo() { this.need(this.isAdmin); this.db = seedDemo(); this.setSession('admin@demo.test'); this.persist(); this.emit(); this.emitAuth(); }
   newId(prefix = 'x') { return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; }
+  logEvent() {}
 }
 
 // ───────────────────────────── Firebase backend ─────────────────────────────
@@ -504,22 +505,46 @@ class FirebaseStore {
   constructor() { this.cur = null; this.authListeners = new Set(); this.watchers = new Set(); }
   async init() {
     const base = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}`;
-    const [app, auth, fs] = await Promise.all([
-      import(`${base}/firebase-app.js`), import(`${base}/firebase-auth.js`), import(`${base}/firebase-firestore.js`),
+    const [app, auth, fs, analytics] = await Promise.all([
+      import(`${base}/firebase-app.js`),
+      import(`${base}/firebase-auth.js`),
+      import(`${base}/firebase-firestore.js`),
+      firebaseConfig.measurementId ? import(`${base}/firebase-analytics.js`).catch(() => null) : Promise.resolve(null),
     ]);
-    this.sdk = { app, auth, fs };
+    this.sdk = { app, auth, fs, analytics };
     this.fapp = app.initializeApp(firebaseConfig);
     this.auth = auth.getAuth(this.fapp);
     this.fdb = fs.getFirestore(this.fapp);
+    if (analytics && firebaseConfig.measurementId) {
+      try {
+        if (await analytics.isSupported()) {
+          this.analytics = analytics.getAnalytics(this.fapp);
+        }
+      } catch {}
+    }
     auth.onAuthStateChanged(this.auth, async (fu) => {
-      if (!fu) { this.detach(); this.cur = null; return this.emitAuth(); }
+      if (!fu) {
+        this.detach(); this.cur = null;
+        if (this.analytics && this.sdk.analytics?.setUserId) {
+          try { this.sdk.analytics.setUserId(this.analytics, null); } catch {}
+        }
+        return this.emitAuth();
+      }
       if (fu.isAnonymous && this.joining) return; // joinTeam finishes the sign-in itself
       const prof = await this.attach(fu).catch(() => null);
       // Signed in with Google but not on the access list (or an anonymous session with no team) → no permissions: sign back out.
       if (!prof) { this.detach(); this.cur = null; this.emitAuth(); auth.signOut(this.auth).catch(() => {}); return; }
       this.cur = prof;
+      if (this.analytics && this.sdk.analytics?.setUserId) {
+        try { this.sdk.analytics.setUserId(this.analytics, fu.uid); } catch {}
+      }
       this.emitAuth();
     });
+  }
+  logEvent(name, params) {
+    if (this.analytics && this.sdk.analytics?.logEvent) {
+      try { this.sdk.analytics.logEvent(this.analytics, name, params); } catch {}
+    }
   }
   // Account facts only; the teams come from attach().
   async fetchProfile(fu) {

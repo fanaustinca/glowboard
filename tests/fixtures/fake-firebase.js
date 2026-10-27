@@ -82,3 +82,9 @@ export const writeBatch = () => {
     notify();
   } };
 };
+
+// ---- analytics ----
+export const isSupported = async () => false;
+export const getAnalytics = () => ({});
+export const logEvent = () => {};
+export const setUserId = () => {};

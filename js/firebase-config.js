@@ -13,6 +13,7 @@ export const firebaseConfig = {
   storageBucket: 'glowboard-fd45a.firebasestorage.app',
   messagingSenderId: '660421892173',
   appId: '1:660421892173:web:aa129c5a2e898437a4e404',
+  measurementId: 'G-J8BVF1G2LG',
 };
 
 export const FIREBASE_SDK_VERSION = '10.12.2';
