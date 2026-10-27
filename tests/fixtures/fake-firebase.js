@@ -1,5 +1,5 @@
-// In-memory stand-in for the Firebase web SDK (app + auth + firestore), used by tests/firebase-mock.mjs.
-// Shared state lives on globalThis.__fb so the three "modules" see the same data.
+// In-memory stand-in for the Firebase web SDK (app + auth + firestore + analytics), used by tests/firebase-mock.mjs.
+// Shared state lives on globalThis.__fb so the SDK "modules" see the same data.
 const fb = (globalThis.__fb ||= {
   docs: { access: {}, events: {}, teams: {}, scores: {}, signatures: {}, practice: {} },
   google: null, // the Google account the next popup signs in as: { uid, email }
@@ -84,7 +84,13 @@ export const writeBatch = () => {
 };
 
 // ---- analytics ----
-export const isSupported = async () => false;
-export const getAnalytics = () => ({});
-export const logEvent = () => {};
+export const isSupported = async () => true;
+// Mirror the SDK's default initial pageview so route tracking can detect duplicates.
+export const initializeAnalytics = (app, options = {}) => {
+  const analytics = { app };
+  if (options.config?.send_page_view !== false) logEvent(analytics, 'page_view', { page_location: location.href });
+  return analytics;
+};
+export const getAnalytics = (app) => initializeAnalytics(app);
+export const logEvent = (_analytics, name, params) => { fb.log.push(['analyticsEvent', name, params]); };
 export const setUserId = () => {};

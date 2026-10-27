@@ -1,5 +1,5 @@
 // Exercises the real FirebaseStore code path (js/store.js) against a faked Firebase SDK:
-// Google sign-in, access-list lookup, public reads, batch score+signature write, coach/admin people management.
+// Google sign-in, access-list lookup, public reads, batch score+signature write, coach/admin people management, route analytics.
 import puppeteer from 'puppeteer-core';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
@@ -20,7 +20,7 @@ await page.setRequestInterception(true);
 page.on('request', (r) => {
   const u = r.url();
   if (u.startsWith('https://www.gstatic.com/firebasejs/')) return r.respond({ status: 200, contentType: 'text/javascript', headers: { 'access-control-allow-origin': '*' }, body: fake });
-  if (u.endsWith('/js/firebase-config.js')) return r.respond({ status: 200, contentType: 'text/javascript', body: `export const firebaseConfig={apiKey:'real-key',authDomain:'x.firebaseapp.com',projectId:'demo-proj',storageBucket:'x',messagingSenderId:'1',appId:'1'};export const EMAIL_DOMAIN='myapp.com';export const FIREBASE_SDK_VERSION='10.12.2';export const isConfigured=()=>true;` });
+  if (u.endsWith('/js/firebase-config.js')) return r.respond({ status: 200, contentType: 'text/javascript', body: `export const firebaseConfig={apiKey:'real-key',authDomain:'x.firebaseapp.com',projectId:'demo-proj',storageBucket:'x',messagingSenderId:'1',appId:'1',measurementId:'G-test'};export const EMAIL_DOMAIN='myapp.com';export const FIREBASE_SDK_VERSION='10.12.2';export const isConfigured=()=>true;` });
   r.continue();
 });
 let passed = 0;
@@ -45,6 +45,14 @@ await page.goto(base, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.standings .row', { timeout: 5000 }).catch(async (e) => { console.log('ERRORS', errors, await page.$eval('main', (m) => m.textContent.slice(0, 300))); throw e; });
 assert.equal(await page.$eval('#modebar', (e) => getComputedStyle(e).display), 'none'); ok('configured → no demo banner; public standings render from Firestore without login');
 assert.equal((await page.$$('.standings .row')).length, 2);
+const pageviews = async () => (await fbState()).log.filter((l) => l[0] === 'analyticsEvent' && l[1] === 'page_view');
+assert.equal((await pageviews()).length, 1, 'one pageview on initial load');
+assert.equal((await pageviews())[0][2].page_title, 'Live standings · GlowBoard');
+ok('initial load records one pageview without an automatic duplicate');
+await hash('schedule');
+assert.equal((await pageviews()).length, 2, 'one more pageview after navigation');
+assert.equal((await pageviews())[1][2].page_path, '#/schedule');
+ok('route navigation records one pageview for the destination');
 await hash('login');
 assert.equal(await page.$('#lg-u'), null, 'no username/password form'); assert.equal(await page.$('#lg-p'), null); assert.ok(await page.$('#lg-google'));
 ok('login page offers Google sign-in only (no username/password)');

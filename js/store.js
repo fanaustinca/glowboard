@@ -518,7 +518,8 @@ class FirebaseStore {
     if (analytics && firebaseConfig.measurementId) {
       try {
         if (await analytics.isSupported()) {
-          this.analytics = analytics.getAnalytics(this.fapp);
+          // The router records pageviews, including the initial page.
+          this.analytics = analytics.initializeAnalytics(this.fapp, { config: { send_page_view: false } });
         }
       } catch {}
     }
