@@ -94,7 +94,7 @@ await assertSucceeds(getDocs(collection(admin, 'access'))); await assertSucceeds
 await assertSucceeds(setDoc(doc(judge, 'scores/ev1_t2_R1'), score()));
 await assertFails(setDoc(doc(judge, 'scores/ev1_t2_R1'), score({ total: 5 }))); // overwrite = update → admins only
 await assertFails(setDoc(doc(judge, 'scores/ev1_t2_R2'), score({ round: 1 }))); await assertFails(setDoc(doc(judge, 'scores/ev1_t2_R3'), score({ round: 3, judgeUid: 'someone-else' })));
-await assertFails(setDoc(doc(judge, 'scores/ev1_t2_R2'), score({ round: 2, total: 5000 }))); await assertFails(setDoc(doc(judge, 'scores/ev1_t2_R2'), score({ round: 2, hasSignature: false })));
+await assertFails(setDoc(doc(judge, 'scores/ev1_t2_R2'), score({ round: 2, total: 5001 }))); await assertFails(setDoc(doc(judge, 'scores/ev1_t2_R2'), score({ round: 2, hasSignature: false })));
 await assertFails(setDoc(doc(judge, 'scores/ev9_t2_R2'), score({ round: 2, eventId: 'ev9' }))); await assertFails(setDoc(doc(judge, 'scores/ev1_t99_R2'), score({ round: 2, teamId: 't99' })));
 await assertFails(deleteDoc(doc(judge, 'scores/ev1_t1_R1')));
 ok('judge: create-once, bound to event+team+round, own uid, real event/team, signed, sane total; cannot overwrite or delete');
@@ -153,7 +153,7 @@ await assertSucceeds(setDoc(doc(coach, 'practice/pn'), { uid: 'u-coach', teamId:
 await assertFails(setDoc(doc(coach, 'practice/pm'), { uid: 'someone', teamId: 't1', total: 80 })); await assertFails(setDoc(doc(coach, 'practice/pm'), { uid: 'u-coach', teamId: 't1', total: 9999 }));
 await assertSucceeds(getDocs(query(collection(coach, 'practice'), where('teamId', '==', 't1')))); await assertFails(getDocs(query(collection(coach, 'practice'), where('teamId', '==', 't2')))); await assertFails(getDocs(collection(coach, 'practice')));
 await assertSucceeds(deleteDoc(doc(coach, 'practice/pn'))); await assertFails(deleteDoc(doc(coach, 'practice/p2'))); await assertSucceeds(updateDoc(doc(coach, 'practice/p1'), { total: 101, note: 'edited' })); await assertFails(updateDoc(doc(coach, 'practice/p2'), { total: 1 }));
-await assertFails(updateDoc(doc(coach, 'practice/p1'), { teamId: 't2' })); await assertFails(updateDoc(doc(coach, 'practice/p1'), { uid: 'u-mem' })); await assertFails(updateDoc(doc(coach, 'practice/p1'), { createdAt: 2 })); await assertFails(updateDoc(doc(coach, 'practice/p1'), { total: 5000 }));
+await assertFails(updateDoc(doc(coach, 'practice/p1'), { teamId: 't2' })); await assertFails(updateDoc(doc(coach, 'practice/p1'), { uid: 'u-mem' })); await assertFails(updateDoc(doc(coach, 'practice/p1'), { createdAt: 2 })); await assertFails(updateDoc(doc(coach, 'practice/p1'), { total: 5001 }));
 ok('practice runs are private to the team: coach can add/read/edit/delete their own team’s, never another team’s; edits cannot move a run or fake its owner/date');
 // member
 await assertSucceeds(setDoc(doc(mem, 'practice/pmem'), { uid: 'u-mem', teamId: 't1', total: 70 })); await assertSucceeds(getDocs(query(collection(mem, 'practice'), where('teamId', '==', 't1'))));
@@ -349,6 +349,36 @@ ok('the pro coach now coaches t3 and t7 at once');
   await assertFails(updateDoc(doc(anon, `helpThreads/${T}`), { resolved: true })); await assertFails(deleteDoc(doc(anon, `helpThreads/${T}`))); await assertFails(deleteDoc(doc(anon, `helpThreads/${T}/msgs/m1`)));
   await assertSucceeds(updateDoc(doc(admin, `helpThreads/${T}`), { resolved: true, lastFrom: 'admin' })); await assertSucceeds(deleteDoc(doc(admin, `helpThreads/${T}/msgs/m1`))); await assertSucceeds(deleteDoc(doc(admin, `helpThreads/${T}`)));
   ok('live help: anyone can ask (guests too, email only if it is really theirs); only admins list, reply, resolve and delete');
+  // ── public team registration ──
+  {
+    const can = async (label, p) => { try { await assertSucceeds(p); } catch (e) { console.log('SHOULD WORK BUT FAILED: ' + label); throw e; } };
+    const cannot = async (label, p) => { try { await assertFails(p); } catch (e) { console.log('SHOULD FAIL BUT WORKED: ' + label); throw e; } };
+    const rb = (db, uid, n, o = {}) => { const b = writeBatch(db); b.set(doc(db, `teams/t${n}`), { number: n, name: 'Pub ' + n, edition: 'founders', registered: true, registeredBy: uid, ...o.team }); b.set(doc(db, `registrations/t${n}`), { coachEmail: 'coach@gmail.com', uid, createdAt: 1, ...o.reg }); b.set(doc(db, `teamSecrets/t${n}`), { password: '123456', enabled: true, isDefault: false, updatedAt: 1, ...o.sec }); return b.commit(); };
+    await can('an anonymous visitor registers an unofficial team (team + coach email + password)', rb(anon2, 'anon-2', 9101));
+    await can('…and then joins it with the password it set', setDoc(doc(anon2, 'teamMembers/anon-2_t9101'), TM('anon-2', 't9101', '123456')));
+    await can('…and logs a practice run for it', setDoc(doc(anon2, 'practice/pr9101'), { uid: 'anon-2', teamId: 't9101', total: 100, createdAt: 1 }));
+    await cannot('a second registration of the same number', rb(anon1, 'anon-1', 9101));
+    await cannot('registering over an official team', rb(anon1, 'anon-1', 1));
+    await cannot('registering as someone else (uid mismatch)', rb(anon1, 'anon-2', 9102));
+    await cannot('registering a team that is not flagged unofficial', rb(anon1, 'anon-1', 9103, { team: { registered: false } }));
+    await cannot('registering with extra fields (createdBy)', rb(anon1, 'anon-1', 9104, { team: { createdBy: 'admin@x.com' } }));
+    await cannot('registering with a bad coach email', rb(anon1, 'anon-1', 9105, { reg: { coachEmail: 'nope' } }));
+    await cannot('registering with a too-short password', rb(anon1, 'anon-1', 9106, { sec: { password: '123' } }));
+    await cannot('registering with a default-flagged password', rb(anon1, 'anon-1', 9107, { sec: { isDefault: true } }));
+    await cannot('a made-up edition', rb(anon1, 'anon-1', 9108, { team: { edition: 'bogus' } }));
+    await cannot('a registration doc for an existing team', setDoc(doc(anon1, 'registrations/t1'), { coachEmail: 'x@gmail.com', uid: 'anon-1', createdAt: 1 }));
+    await cannot('a password for an existing team', setDoc(doc(anon1, 'teamSecrets/t2'), { password: '999999', enabled: true, isDefault: false, updatedAt: 1 }));
+    await cannot('the public cannot read the coach email', getDoc(doc(anon1, 'registrations/t9101'))); await cannot('a plain member cannot read it', getDoc(doc(mem, 'registrations/t9101')));
+    await can('a host can read it', getDoc(doc(host, 'registrations/t9101'))); await can('an admin can read it', getDoc(doc(admin, 'registrations/t9101')));
+    await can('everyone can read the team itself', getDoc(doc(anon1, 'teams/t9101')));
+    await cannot('the registrant cannot make the team official', updateDoc(doc(anon2, 'teams/t9101'), { registered: false }));
+    await cannot('a host cannot rename a registration', updateDoc(doc(host, 'teams/t9101'), { name: 'Hijack' }));
+    await cannot('a host cannot flip it to unofficial=true on an official team', updateDoc(doc(host, 'teams/t32'), { registered: true }));
+    await can('a host verifies it (registered → false)', updateDoc(doc(host, 'teams/t9101'), { registered: false }));
+    await cannot('…and cannot do it twice / change it back', updateDoc(doc(host, 'teams/t9101'), { registered: true }));
+    await can('an admin deletes a registration', deleteDoc(doc(admin, 'registrations/t9101'))); await cannot('a host cannot delete one', deleteDoc(doc(host, 'registrations/t9101')));
+    ok('public registration: anyone registers a new flagged team once; the coach email stays private; only a host/admin can verify it');
+  }
 }
 await env.cleanup();
 console.log(`\n${passed} emulator checks passed`);

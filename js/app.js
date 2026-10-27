@@ -20,7 +20,7 @@ const ROUTES = {
   practice: { view: teamView, label: 'Teams', roles: ['signedin'], nav: false },
   stats: { view: teamView, label: 'Teams', roles: ['signedin'], nav: false },
   analytics: { view: teamView, label: 'Teams', roles: ['signedin'], nav: false },
-  team: { view: teamView, label: 'Teams', icon: '👥', roles: ['signedin'], nav: true },
+  team: { view: teamView, label: 'Teams', icon: '👥', roles: null, nav: true },
   event: { view: eventView, label: 'Event', icon: '🎪', roles: ['host', 'admin'], nav: true },
   admin: { view: adminView, label: 'Admin', icon: '⚙️', roles: ['admin'], nav: true },
   sample: { view: sampleView, label: 'Sample team', short: 'Sample', icon: '🧪', roles: null, nav: true },

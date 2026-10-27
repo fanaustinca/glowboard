@@ -52,7 +52,7 @@ ok('login page offers Google sign-in only (no username/password)');
 // stranger: authenticates with Google but is not on the access list → rejected and signed back out
 await google('uid-ghost', 'Ghost@Gmail.com'); await tap(page, '#lg-google'); await w(600);
 assert.match(await page.$eval('#lg-err', (e) => e.textContent), /ghost@gmail\.com isn’t on the access list/);
-assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Sample team', 'Resources', 'Help']); assert.equal(await page.$eval('#signout', (e) => getComputedStyle(e).display), 'none'); ok('a Google account that is not on the access list is rejected (and gets no privileges)');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Teams', 'Sample team', 'Resources', 'Help']); assert.equal(await page.$eval('#signout', (e) => getComputedStyle(e).display), 'none'); ok('a Google account that is not on the access list is rejected (and gets no privileges)');
 assert.ok((await fbState()).log.some((l) => l[0] === 'googlePopup' && l[1] === true)); ok('uses the Google provider popup');
 assert.match(await page.$eval('#lg-err', (e) => e.textContent), /Document ID exactly “ghost@gmail\.com”/); ok('the not-listed message tells the first admin the exact Firestore document ID to create (lowercased)');
 // rules not published → Firestore refuses the lookup: say THAT, not "not on the list"
@@ -74,7 +74,7 @@ await joinTeam('1', '123456'); assert.match(await page.$eval('#lg-err', (e) => e
 await page.evaluate(() => { globalThis.__fb.anonDisabled = false; }); ok('if Anonymous sign-in is switched off in Firebase, team-password sign-in says exactly what to enable (no raw “admin-restricted-operation”)');
 await joinTeam('1', '000000'); assert.match(await page.$eval('#lg-err', (e) => e.textContent), /team number and password don’t match/);
 await joinTeam('99', '123456'); assert.match(await page.$eval('#lg-err', (e) => e.textContent), /don’t match/);
-assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Sample team', 'Resources', 'Help']); assert.equal(Object.keys((await fbState()).docs.teamMembers).length, 0, 'failed attempts leave nothing behind');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Teams', 'Sample team', 'Resources', 'Help']); assert.equal(Object.keys((await fbState()).docs.teamMembers).length, 0, 'failed attempts leave nothing behind');
 ok('a wrong team number or password is rejected (and signed back out)');
 await joinTeam('1', '123456', 'Sam');
 assert.equal(await page.evaluate(() => location.hash), '#/team');
@@ -89,7 +89,7 @@ ok('Judge / Admin / Event pages are closed to password members');
 // the coach changes the team password → the old session is signed out on its next read
 await page.evaluate(() => { globalThis.__fb.docs.teamSecrets.t1.password = '246810'; globalThis.__fb.expirePractice = true; });
 await hash('stats'); await w(500);
-assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Sample team', 'Resources', 'Help']); await hash('login');
+assert.deepEqual(await nav(), ['Standings', 'Schedule', 'Scoring tool', 'Timer', 'Teams', 'Sample team', 'Resources', 'Help']); await hash('login');
 assert.match(await page.$eval('#lg-err', (e) => e.textContent), /team password for #1 was changed or turned off/); ok('changing the team password signs old password sessions out, with a clear message');
 await page.evaluate(() => { globalThis.__fb.expirePractice = false; });
 await joinTeam('1', '123456'); assert.match(await page.$eval('#lg-err', (e) => e.textContent), /don’t match/);

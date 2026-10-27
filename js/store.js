@@ -64,10 +64,10 @@ export const eventEditions = (ev) => {
   return e.length ? EDITION_IDS.filter((x) => e.includes(x)) : ['founders'];
 };
 export const teamEdition = (t) => editionOf(t);
-// The teams in an event: the ones added to it (events made before team lists existed have none saved and show every team) that play one of its editions.
+// The teams in an event: the ones added to it (events made before team lists existed have none saved and show every official team — public registrations stay out until a host adds them) that play one of its editions.
 export const eventTeams = (ev, teams) => {
   const eds = eventEditions(ev);
-  return (Array.isArray(ev?.teamIds) ? teams.filter((t) => ev.teamIds.includes(t.id)) : teams).filter((t) => eds.includes(teamEdition(t)));
+  return (Array.isArray(ev?.teamIds) ? teams.filter((t) => ev.teamIds.includes(t.id)) : teams.filter((t) => !t.registered)).filter((t) => eds.includes(teamEdition(t)));
 };
 // One leaderboard per edition the event runs: [{ ed, label, future, rows: standings() }], Founders first.
 export const eventBoards = (ev, teams, scores) => {
@@ -84,7 +84,17 @@ const denied = (m) => err('permission-denied', m || 'Missing or insufficient per
 
 // ───────────────────────────── Demo backend ─────────────────────────────
 const KEY = 'glowboard-demo-v2';
-const COLS = ['teams', 'events', 'eventHosts', 'eventJudges', 'teamSecrets', 'teamMembers', 'roster', 'scores', 'signatures', 'practice', 'access'];
+const newCode = () => { const a = new Uint32Array(1); crypto.getRandomValues(a); return String(100000 + (a[0] % 900000)); };
+// Validates the public "Register a team" form.
+function checkRegistration(f = {}) {
+  const number = parseInt(f.number, 10), name = String(f.name || '').trim(), coachEmail = normEmail(f.coachEmail);
+  if (!(number > 0 && number <= 999999)) throw err('invalid', 'Enter your team number.');
+  if (!name || name.length > 60) throw err('invalid', 'Enter a team name (up to 60 characters).');
+  if (!EMAIL_RE.test(coachEmail) || coachEmail.length > 120) throw err('invalid', 'Enter the coach’s Gmail address.');
+  return { number, name, coachEmail, edition: f.edition === 'future' ? 'future' : 'founders' };
+}
+
+const COLS = ['teams', 'registrations', 'events', 'eventHosts', 'eventJudges', 'teamSecrets', 'teamMembers', 'roster', 'scores', 'signatures', 'practice', 'access'];
 
 function mulberry(seed) { return () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -183,6 +193,7 @@ class DemoStore {
     this.authListeners = new Set();
     try { this.db = JSON.parse(localStorage.getItem(KEY)) || null; } catch { this.db = null; }
     if (!this.db) { this.db = seedDemo(); this.persist(); }
+    for (const c of COLS) this.db[c] ||= {}; // data saved before a collection existed
     try { this.session = sessionStorage.getItem(KEY + '-session'); } catch { this.session = null; }
     window.addEventListener('storage', (e) => {
       if (e.key !== KEY) return;
@@ -235,6 +246,21 @@ class DemoStore {
     rememberTeam({ teamId, password: secret.password, name: String(name).trim().slice(0, 40) });
     this.persist(); this.emit(); this.emitAuth();
     return this.user;
+  }
+  // Public registration: anyone creates an UNOFFICIAL team (registered: true) with its own password and joins it. A host or admin
+  // makes it official by adding it to an event. The coach's email stays private (registrations/{teamId}).
+  async registerTeam(f) {
+    const { number, name, coachEmail, edition } = checkRegistration(f);
+    const teamId = `t${number}`;
+    if (this.db.teams[teamId]) throw err('exists', `Team #${number} already exists. Join it with its team password instead.`);
+    if (!this.session) this.setSession(`pw-${Math.random().toString(36).slice(2, 10)}`);
+    const password = newCode();
+    this.db.teams[teamId] = { id: teamId, number, name, edition, registered: true, registeredBy: this.session };
+    this.db.registrations[teamId] = { id: teamId, coachEmail, uid: this.session, createdAt: Date.now() };
+    this.db.teamSecrets[teamId] = { id: teamId, password, enabled: true, isDefault: false, updatedAt: Date.now() };
+    this.persist();
+    await this.joinTeam(number, password, '');
+    return { teamId, number, name, password };
   }
   async signInTeam(number, password, name = '') {
     if (this.session && !this.session.startsWith('pw-')) this.setSession(null);
@@ -289,6 +315,7 @@ class DemoStore {
       let rows = Object.values(this.db[col] || {});
       if (col === 'signatures') rows = [];
       if (col === 'teamSecrets') rows = [];
+      if (col === 'registrations') rows = this.isAdmin(u) || this.isHost(u) ? rows : [];
       if (col === 'teamMembers') rows = this.isAdmin(u) ? rows : rows.filter((r) => u && (r.uid === u.uid || this.coachOf(u, r.teamId)));
       if (col === 'roster') rows = this.isAdmin(u) ? rows : rows.filter((r) => u?.email && (r.email === u.email || this.coachOf(u, r.teamId)));
       if (col === 'eventJudges') rows = this.isAdmin(u) ? rows : rows.filter((r) => u && (r.emails || []).includes(u.email));
@@ -365,7 +392,8 @@ class DemoStore {
     if (col === 'teams') {
       const nameOnly = Object.keys(fields).every((k) => k === 'name');
       const nameColors = Object.keys(fields).every((k) => ['name', 'colors'].includes(k));
-      if (!(this.isAdmin(u) || (this.coachOf(u, id) && nameColors) || (this.isHost(u) && ex.createdBy === u.email && nameOnly))) throw denied();
+      const verify = this.isHost(u) && ex.registered === true && fields.registered === false && Object.keys(fields).length === 1; // a host makes a public registration official
+      if (!(this.isAdmin(u) || (this.coachOf(u, id) && nameColors) || (this.isHost(u) && ex.createdBy === u.email && nameOnly) || verify)) throw denied();
       if (!this.validTeam({ ...ex, ...fields })) throw err('invalid', 'A team needs a number and a name (max 60 characters), and up to 3 valid colors.');
     } else if (col === 'roster') {
       if (!(this.isAdmin(u) && Object.keys(fields).every((k) => ['role', 'name'].includes(k)) && (!fields.role || ['member', 'coach'].includes(fields.role)))) throw denied();
@@ -405,7 +433,8 @@ class DemoStore {
       if (!(this.isAdmin(u) || this.onTeam(u, row?.teamId))) throw denied();
     } else if (col === 'teams') {
       if (!(this.isAdmin(u) || (this.isHost(u) && row?.createdBy === u.email))) throw denied();
-    } else if (col === 'teamMembers') {
+    } else if (col === 'registrations') this.need(this.isAdmin);
+    else if (col === 'teamMembers') {
       if (!(this.isAdmin(u) || this.coachOf(u, row?.teamId) || (u && row?.uid === u.uid))) throw denied();
     } else if (col === 'eventJudges') this.need((x) => this.isAdmin(x) || this.hostOf(x, id));
     else if (col === 'scores') this.need((x) => this.isAdmin(x) || this.hostOf(x, row?.eventId));
@@ -593,6 +622,30 @@ class FirebaseStore {
       this.cur = prof; this.emitAuth();
       return prof;
     } catch (e) { throw e.code?.startsWith?.('auth/') ? friendly(e) : e; } finally { this.joining = false; }
+  }
+  // Public registration (see the demo store): anonymous sign-in if needed, then one atomic batch for the team, the private
+  // registration (coach email) and the team's password; finally join the new team like any member would.
+  async registerTeam(f) {
+    const { auth, fs } = this.sdk;
+    const { number, name, coachEmail, edition } = checkRegistration(f);
+    const teamId = `t${number}`, password = newCode();
+    const fresh = !this.auth.currentUser;
+    this.joining = true;
+    try {
+      const user = this.auth.currentUser || (await auth.signInAnonymously(this.auth)).user;
+      try {
+        const b = fs.writeBatch(this.fdb);
+        b.set(fs.doc(this.fdb, 'teams', teamId), { number, name, edition, registered: true, registeredBy: user.uid });
+        b.set(fs.doc(this.fdb, 'registrations', teamId), { coachEmail, uid: user.uid, createdAt: Date.now() });
+        b.set(fs.doc(this.fdb, 'teamSecrets', teamId), { password, enabled: true, isDefault: false, updatedAt: Date.now() });
+        await b.commit();
+      } catch (e) {
+        if (fresh) await auth.signOut(this.auth).catch(() => {});
+        throw e.code === 'permission-denied' ? err('exists', `Team #${number} already exists (or the latest firestore.rules aren’t published). Join it with its team password instead.`) : friendly(e);
+      }
+    } finally { this.joining = false; }
+    await this.joinTeam(number, password, '');
+    return { teamId, number, name, password };
   }
   async signInTeam(number, password, name = '') {
     const cur = this.auth.currentUser;

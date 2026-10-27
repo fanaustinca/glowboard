@@ -203,6 +203,14 @@ service cloud.firestore {
     match /teamSecrets/{teamId} {
       allow read: if isAdmin() || coachOf(teamId);
       allow create, update: if (isAdmin() || coachOf(teamId) || teamCreator(teamId)) && validSecret(request.resource.data);
+      // the person registering a public team sets its first password, in the same batch that creates the team
+      allow create: if request.auth != null && (isAnon() || signedIn())
+        && !exists(/databases/$(database)/documents/teams/$(teamId))
+        && getAfter(/databases/$(database)/documents/teams/$(teamId)).data.get('registeredBy', '') == request.auth.uid
+        && getAfter(/databases/$(database)/documents/teams/$(teamId)).data.get('registered', false) == true
+        && request.resource.data.keys().hasOnly(['password', 'enabled', 'isDefault', 'updatedAt'])
+        && request.resource.data.password is string && request.resource.data.password.size() >= 6 && request.resource.data.password.size() <= 64
+        && request.resource.data.enabled == true && request.resource.data.isDefault == false;
       allow delete: if isAdmin();
     }
 
@@ -238,8 +246,18 @@ service cloud.firestore {
       allow create: if (isAdmin() || isHostAny()) && validTeam(request.resource.data)
         && request.resource.data.createdBy == request.auth.token.email
         && teamId == 't' + string(request.resource.data.number);
+      // Public registration: anyone (even anonymous) can add an UNOFFICIAL team. It is only a new document (never an
+      // overwrite), flagged registered: true, and stays out of events until a host or admin adds it.
+      allow create: if request.auth != null && (isAnon() || signedIn())
+        && request.resource.data.keys().hasOnly(['number', 'name', 'edition', 'registered', 'registeredBy'])
+        && request.resource.data.registered == true && request.resource.data.registeredBy == request.auth.uid
+        && validTeam(request.resource.data) && teamId == 't' + string(request.resource.data.number);
       allow delete: if isAdmin() || (isHostAny() && resource.data.get('createdBy', '') == request.auth.token.email);
       allow update: if (isAdmin() && validTeam(request.resource.data))
+        // a host makes a public registration official (and may change nothing else on it)
+        || (isHostAny() && resource.data.get('registered', false) == true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['registered'])
+          && request.resource.data.registered == false)
         || (isHostAny() && resource.data.get('createdBy', '') == request.auth.token.email
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
           && validName(request.resource.data.name))
@@ -247,6 +265,21 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'colors'])
           && validName(request.resource.data.name)
           && validColors(request.resource.data.get('colors', [])));
+    }
+
+    // The private half of a public registration (the coach's email). Written once, together with the team; read by admins
+    // and hosts, who verify the team.
+    match /registrations/{teamId} {
+      allow read: if isAdmin() || isHostAny();
+      allow create: if request.auth != null && (isAnon() || signedIn())
+        && !exists(/databases/$(database)/documents/teams/$(teamId))
+        && request.resource.data.keys().hasOnly(['coachEmail', 'uid', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.coachEmail is string && request.resource.data.coachEmail.size() <= 120
+        && request.resource.data.coachEmail.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$')
+        && getAfter(/databases/$(database)/documents/teams/$(teamId)).data.get('registeredBy', '') == request.auth.uid
+        && getAfter(/databases/$(database)/documents/teams/$(teamId)).data.get('registered', false) == true;
+      allow delete: if isAdmin();
     }
 
     match /scores/{scoreId} {

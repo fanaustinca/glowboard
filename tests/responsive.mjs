@@ -719,6 +719,44 @@ await check('live help: a guest asks, an admin sees who and replies, the guest s
   assert.match(await text(page, '#chat-log'), /Support/);
   assert.equal(await page.$('#in-list'), null);
 });
+await check('public registration: anyone registers an unofficial team (number, coach gmail, name); an admin verifies it, or a host adds it to an event', async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const register = async (num, name, mail) => {
+    await goHash(page, 'team');
+    await page.waitForSelector('#rg-form');
+    await page.$eval('#rg-form', (f) => f.reset());
+    await page.type('#rg-num', num); await page.type('#rg-name', name); await page.type('#rg-coach', mail);
+    await tap(page, '#rg-form button.primary');
+  };
+  await page.evaluate(() => document.getElementById('signout')?.click()); await wait(150);
+  await goHash(page, 'team');
+  assert.equal(await page.$('#tm-add'), null, 'the public Teams page has no add-by-password form');
+  assert.ok(await page.$('#rg-form'), 'the public Teams page offers Register a team');
+  assert.ok((await page.$$eval('#nav a .nl', (a) => a.map((x) => x.textContent))).includes('Teams'), 'Teams is a public tab');
+  await register('4201', 'Copycat', 'copy@gmail.com'); await page.waitForSelector('#rg-err:not([hidden])');
+  assert.match(await text(page, '#rg-err'), /already exists/);
+  await register('9100', 'Public FC', 'pub@gmail.com'); await page.waitForSelector('dialog[open] code');
+  const pw = await page.$eval('dialog[open] code', (e) => e.textContent); assert.match(pw, /^\d{6}$/);
+  await page.keyboard.press('Escape'); await wait(100);
+  await page.waitForFunction(() => document.querySelector('#tm-list')?.textContent.includes('Public FC'));
+  assert.match(await text(page, '#tm-list'), /Unofficial/);
+  await register('9101', 'Second Pub', 'pub2@gmail.com'); await page.waitForSelector('dialog[open] code'); await page.keyboard.press('Escape'); await wait(100);
+  await goHash(page, ''); assert.doesNotMatch(await text(page, 'main'), /Public FC/, 'unofficial teams stay off the public standings');
+  await page.evaluate(() => document.getElementById('signout').click()); await wait(150);
+  await login(page, 'admin@demo.test'); await goHash(page, 'admin');
+  assert.match(await text(page, '#a-reg'), /Public FC/); assert.match(await text(page, '#a-reg'), /pub@gmail\.com/);
+  assert.doesNotMatch(await text(page, '#a-teams'), /Public FC/, 'registrations are listed apart from official teams');
+  await page.$eval('[data-verify="t9100"]', (b) => b.click()); await page.waitForFunction(() => document.querySelector('#a-teams')?.textContent.includes('Public FC'));
+  assert.doesNotMatch(await text(page, '#a-reg'), /Public FC/); assert.match(await text(page, '#a-reg'), /Second Pub/);
+  await page.evaluate(() => document.getElementById('signout').click()); await wait(150);
+  await login(page, 'host@demo.test'); await goHash(page, 'event');
+  await page.waitForSelector('#e-pubreg [data-pubadd]');
+  assert.match(await text(page, '#e-pubreg'), /Second Pub/); assert.match(await text(page, '#e-pubreg'), /pub2@gmail\.com/);
+  await page.$eval('[data-pubadd="t9101"]', (b) => b.click()); await page.waitForFunction(() => document.querySelector('#e-teamlist')?.textContent.includes('Second Pub'));
+  assert.doesNotMatch(await text(page, '#e-pubreg'), /Second Pub/, 'verified teams leave the public-registration list');
+  await page.evaluate(() => document.getElementById('signout').click()); await wait(150);
+  const t = await page.evaluate(() => JSON.parse(localStorage.getItem('glowboard-demo-v2')).teams.t9101); assert.ok(!t.registered, 'adding to an event makes the team official');
+});
 await check('match timer: sound reminder popup, the 2:30 clock starts at once; pause and reset', async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   await goHash(page, 'timer');

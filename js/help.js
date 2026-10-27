@@ -14,6 +14,7 @@ export function helpSections(u, scoreable = []) {
     '<b>Timer</b> runs the 2:30 match with a start horn, reminders at 1:00 and 0:30 and an end horn. Turn the sound up first.',
     '<b>Resources</b> links to the Founders and Future rulebooks, scoresheets and referee training. It is open to everyone.',
     '<b>Sample team</b> has made-up practice runs so you can try the Stats and Advanced tools. It is read-only.',
+    '<b>Teams → Register a team</b> lets anyone add their team with its number, name and coach Gmail to track practice runs. A new registration is <b>unofficial</b> until an event host or admin adds it to an event.',
     '<b>Live help</b> (below) lets you message the admins with a question. You don’t need to sign in.',
   ]));
   if (!u) {

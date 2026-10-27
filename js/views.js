@@ -179,6 +179,33 @@ export function loginView(root, ctx) {
 
 const gate = (root, msg, ctx) => { root.innerHTML = `<section class="card narrow"><h1>Sign in required</h1><p class="muted">${esc(msg)}</p><a class="btn primary" href="#/login">Sign in</a></section>`; ctx.afterLogin = location.hash; return {}; };
 
+// ---- public "Register a team": anyone can add an unofficial team (practice tracking only) with number, name and coach Gmail ----
+const registerCardHTML = (open) => `<section class="card" id="rg-card"><h2>Register a team</h2>
+  <p class="muted small">No account needed. Register your team to track practice runs and see your stats. A new registration is <b>unofficial</b> until an event host or admin adds your team to an event — then it becomes an official team.</p>
+  <form id="rg-form" class="grid-user" novalidate>
+    <label class="field"><span>Team number</span><input id="rg-num" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" required></label>
+    <label class="field"><span>Team name</span><input id="rg-name" maxlength="60" autocomplete="off" required></label>
+    <label class="field"><span>Coach’s Gmail</span><input id="rg-coach" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="email" required></label>
+    <label class="field"><span>Edition</span><select id="rg-ed">${editionOptions(['founders', 'future'], 'founders')}</select></label>
+    <button class="btn primary">Register team</button></form>
+  <div id="rg-err" class="error" role="alert" hidden></div></section>`;
+function bindRegister(root, ctx, onDone) {
+  const form = root.querySelector('#rg-form'); if (!form) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const er = root.querySelector('#rg-err'); er.hidden = true;
+    const btn = e.submitter; btn.disabled = true;
+    try {
+      const r = await ctx.store.registerTeam({ number: root.querySelector('#rg-num').value, name: root.querySelector('#rg-name').value, coachEmail: root.querySelector('#rg-coach').value, edition: root.querySelector('#rg-ed').value });
+      const dlg = modal(`<p><b>#${esc(r.number)} ${esc(r.name)}</b> is registered. Save the team password — teammates join from the Teams tab with the team number and this password:</p>
+        <div class="pwbox"><code>${esc(r.password)}</code><button class="btn small" id="rg-copy" type="button">Copy</button></div>
+        <p class="muted small">Your team is <b>unofficial</b> until an event host or admin adds it to an event. Practice runs and stats work right away.</p>`, { title: 'Team registered' });
+      dlg.querySelector('#rg-copy')?.addEventListener('click', async (ev) => { if (await copyText(r.password)) ev.currentTarget.textContent = 'Copied'; });
+      form.reset(); onDone?.(r);
+    } catch (x) { er.hidden = false; er.textContent = x.message; } finally { btn.disabled = false; }
+  });
+}
+
 // ---- team password helpers (admin, host and coach all use these) ----
 const copyText = async (t) => { try { await navigator.clipboard.writeText(t); return true; } catch { return false; } };
 async function openTeamPassword(ctx, teamId) {
@@ -371,7 +398,15 @@ export function statsView(root, ctx, { onEdit = () => {}, readOnly = false } = {
 // with its number + password (remembered on this device, and linked to your Google account when you're signed in).
 export function teamView(root, ctx) {
   let u = ctx.user();
-  if (!u) return gate(root, 'Sign in to see your teams — or join one with its team number and password.', ctx);
+  if (!u && /^#\/?(practice|stats|analytics)/.test(location.hash)) return gate(root, 'Sign in to see your teams — or join one with its team number and password.', ctx);
+  if (!u) { // the public side of the Teams tab: join a team you already have, or register a new one
+    ctx.afterLogin = '#/team';
+    root.innerHTML = `<h1 class="page-title">Teams</h1>
+      <section class="card"><h2>Already on a team?</h2><p class="muted small">Sign in with your Google account, or join with your team number and the team password.</p><a class="btn primary" href="#/login">Sign in or join a team</a></section>
+      ${registerCardHTML()}`;
+    bindRegister(root, ctx);
+    return {};
+  }
   let people = [], joined = [], secret = null, colors = [], sig = '', panels = {};
   const hk = location.hash.replace(/^#\/?/, '').split('?');
   let tab = { practice: 'practice', analytics: 'advanced' }[hk[0]] || 'stats';
@@ -454,7 +489,9 @@ export function teamView(root, ctx) {
           <label class="field"><span>Team password</span><input id="tm-pw" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>
           <button class="btn primary">Add team</button></form>
         <datalist id="tm-names"></datalist>
-        <div id="tm-err" class="error" role="alert" hidden></div></section>`;
+        <div id="tm-err" class="error" role="alert" hidden></div></section>
+      ${registerCardHTML()}`;
+    bindRegister(root, ctx);
     $('#tm-add').addEventListener('submit', onJoin);
     $('#tm-num').addEventListener('input', autofill); $('#tm-tname').addEventListener('input', autofill);
     if (coach()) bindManage();
@@ -469,7 +506,7 @@ export function teamView(root, ctx) {
     $('#tm-list').innerHTML = u.teams.map((t) => {
       const team = teamOf(t.teamId), active = t.teamId === u.teamId;
       return `<li class="trow ${active ? 'on' : ''}" data-tid="${esc(t.teamId)}"><span class="tmain">${teamDots(team)}<b>${esc(team ? `#${team.number} ${team.name}` : t.teamId)}</b>
-        <span class="badge ${t.role === 'coach' ? 'live-b' : ''}">${t.role === 'coach' ? 'Coach' : 'Member'}</span><small class="block">${t.via === 'password' ? 'joined with the team password' : t.role === 'coach' ? 'you coach this team' : 'added by a coach'}</small></span>
+        <span class="badge ${t.role === 'coach' ? 'live-b' : ''}">${t.role === 'coach' ? 'Coach' : 'Member'}</span>${team?.registered ? ' <span class="badge" title="Registered by the public — practice only until an event host or admin adds it to an event">Unofficial</span>' : ''}<small class="block">${t.via === 'password' ? 'joined with the team password' : t.role === 'coach' ? 'you coach this team' : 'added by a coach'}</small></span>
         <span class="acts">${active ? '<span class="badge on">Active</span>' : `<button class="btn small" data-use="${esc(t.teamId)}">Open</button>`}${t.role === 'coach' ? '' : `<button class="btn ghost small danger" data-leave="${esc(t.teamId)}" aria-label="Leave ${esc(label(t.teamId))}">Leave</button>`}</span></li>`;
     }).join('') || '<li class="empty">You aren’t on a team yet — add one below.</li>';
     const dt = teamOf(u.teamId);
@@ -562,7 +599,7 @@ export function adminView(root, ctx) {
   const u = ctx.user();
   if (!u) return gate(root, 'Admins sign in to manage the event.', ctx);
   if (u.role !== 'admin') { root.innerHTML = '<section class="card narrow"><h1>Admins only</h1><p class="muted">Admin only.</p></section>'; return {}; }
-  let people = [], roster = [];
+  let people = [], roster = [], regs = [];
   const demo = ctx.store.mode === 'demo';
   root.innerHTML = `<h1 class="page-title">Admin console</h1>
     <section class="card"><h2>Events</h2>
@@ -579,6 +616,9 @@ export function adminView(root, ctx) {
       <div id="a-terr" class="error" role="alert" hidden></div>
       <details class="bulk"><summary>Bulk add (paste “number, name, coach@gmail.com” per line — coach optional; uses the edition chosen above)</summary><textarea id="a-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers, coach@gmail.com&#10;5530, Byte Me"></textarea><button class="btn ghost" id="a-bulkgo" type="button">Add all</button></details>
       <ul class="admin-list" id="a-teams"></ul></section>
+    <section class="card"><h2>Public registrations <small id="a-regcount"></small></h2>
+      <p class="muted small">Teams that signed up from the Teams tab. They work like normal teams for practice runs and stats, but stay <b>unofficial</b> and out of events until a host or admin adds them to an event — or you verify them here.</p>
+      <ul class="admin-list" id="a-reg"></ul></section>
     <section class="card"><h2>People &amp; access</h2>
       <p class="muted small">Add coaches, referees, hosts and admins by Google email. Hosts are set per event.</p>
       <form id="a-user" class="grid-user" novalidate><label class="field"><span>Google email</span><input id="a-ue" type="email" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="off" required></label>
@@ -599,7 +639,10 @@ export function adminView(root, ctx) {
     const events = ctx.events().slice().sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0));
     $('#a-events').innerHTML = events.map((e) => `<li><span><b>${esc(e.name)}</b>${e.live ? ' <span class="badge live-b">live</span>' : ''}${e.test ? ' <span class="badge">test</span>' : ''}<small class="block">${e.date ? esc(e.date) + ' · ' : ''}${eventEditions(e).map((x) => EDITIONS[x].label).join(' + ')} · ${eventTeams(e, ctx.teams()).length} team${eventTeams(e, ctx.teams()).length === 1 ? "" : "s"} · ${hostCount(e.id)} host${hostCount(e.id) === 1 ? '' : 's'}${e.schedule?.rows?.length ? ' · schedule ✓' : ''}</small></span>
       <span class="acts"><select class="evedsel" data-evedsel="${esc(e.id)}" aria-label="Editions for ${esc(e.name)}">${EVENT_EDITION_CHOICES.map((c) => `<option value="${c.v}"${editionChoice(e) === c.v ? ' selected' : ''}>${c.label}</option>`).join('')}</select><button class="btn ghost small" data-evrename="${esc(e.id)}">Rename</button><button class="btn ghost small" data-evmanage="${esc(e.id)}">Manage</button><button class="btn ghost small" data-evhosts="${esc(e.id)}">Hosts</button>${e.live ? '' : `<button class="btn ghost small" data-evlive="${esc(e.id)}">Make live</button>`}<button class="btn ghost small danger" data-delev="${esc(e.id)}" aria-label="Delete event ${esc(e.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No events yet — add one so judges can score.</li>';
-    $('#a-teams').innerHTML = teams.map((t) => `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span><small class="block">${esc(roster.filter((p) => p.role === 'coach' && p.teamId === t.id).map((p) => p.email).join(', ') || 'no coach yet')}</small></span><span class="acts"><button class="btn ghost small" data-teamed="${esc(t.id)}" aria-label="Switch edition of ${esc(t.name)}">${teamEdition(t) === 'future' ? 'Make Founders' : 'Make Future'}</button><button class="btn ghost small" data-teampw="${esc(t.id)}" aria-label="Team password for ${esc(t.name)}">Password</button><button class="btn ghost small" data-rename="${esc(t.id)}" aria-label="Rename team ${esc(t.name)}">Rename</button><button class="btn ghost small danger" data-delteam="${esc(t.id)}" aria-label="Delete team ${esc(t.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No teams yet.</li>';
+    $('#a-teams').innerHTML = teams.filter((t) => !t.registered).map((t) => `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span><small class="block">${esc(roster.filter((p) => p.role === 'coach' && p.teamId === t.id).map((p) => p.email).join(', ') || 'no coach yet')}</small></span><span class="acts"><button class="btn ghost small" data-teamed="${esc(t.id)}" aria-label="Switch edition of ${esc(t.name)}">${teamEdition(t) === 'future' ? 'Make Founders' : 'Make Future'}</button><button class="btn ghost small" data-teampw="${esc(t.id)}" aria-label="Team password for ${esc(t.name)}">Password</button><button class="btn ghost small" data-rename="${esc(t.id)}" aria-label="Rename team ${esc(t.name)}">Rename</button><button class="btn ghost small danger" data-delteam="${esc(t.id)}" aria-label="Delete team ${esc(t.name)}">Delete</button></span></li>`).join('') || '<li class="empty">No teams yet.</li>';
+    const pending = teams.filter((t) => t.registered);
+    $('#a-regcount').textContent = `(${pending.length})`;
+    $('#a-reg').innerHTML = pending.map((t) => { const rg = regs.find((r) => r.id === t.id); return `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span> <span class="badge">Unofficial</span><small class="block">${esc(rg?.coachEmail || 'no coach email')}${rg?.createdAt ? ` · registered ${esc(timeAgo(rg.createdAt))}` : ''}</small></span><span class="acts"><button class="btn small primary" data-verify="${esc(t.id)}" aria-label="Verify ${esc(t.name)}">Verify</button><button class="btn ghost small" data-teampw="${esc(t.id)}" aria-label="Team password for ${esc(t.name)}">Password</button><button class="btn ghost small" data-rename="${esc(t.id)}" aria-label="Rename team ${esc(t.name)}">Rename</button><button class="btn ghost small danger" data-delteam="${esc(t.id)}" aria-label="Delete team ${esc(t.name)}">Delete</button></span></li>`; }).join('') || '<li class="empty">No public registrations.</li>';
     const sel = $('#a-ut'); const cur = sel.value;
     sel.innerHTML = teams.map((t) => `<option value="${esc(t.id)}">${esc(t.number)} ${esc(t.name)}</option>`).join(''); sel.value = cur;
     $('#a-ut-wrap').hidden = !['coach', 'member'].includes($('#a-ur').value);
@@ -726,7 +769,14 @@ export function adminView(root, ctx) {
     const d = t.dataset;
     if (d.teampw) openTeamPassword(ctx, d.teampw);
     if (d.teamed) { const cur = ctx.teams().find((x) => x.id === d.teamed); run(() => ctx.store.patch('teams', d.teamed, { edition: teamEdition(cur) === 'future' ? 'founders' : 'future' })); }
-    if (d.delteam && confirm('Delete this team? Its official scores stay in the database but no longer show.')) run(() => ctx.store.remove('teams', d.delteam));
+    if (d.delteam && confirm('Delete this team? Its official scores stay in the database but no longer show.')) run(async () => { const reg = regs.some((r) => r.id === d.delteam); await ctx.store.remove('teams', d.delteam); if (reg) await ctx.store.remove('registrations', d.delteam); });
+    if (d.verify) run(async () => {
+      const team = ctx.teams().find((x) => x.id === d.verify), rg = regs.find((r) => r.id === d.verify);
+      await ctx.store.patch('teams', d.verify, { registered: false });
+      let note = '';
+      if (rg?.coachEmail && !roster.some((r) => r.teamId === d.verify && r.email === rg.coachEmail)) { try { await addTeamPerson(ctx.store, u, d.verify, rg.coachEmail, 'coach'); note = ` ${rg.coachEmail} can now sign in as its coach.`; } catch { note = ' (The coach couldn’t be added — add them under People.)'; } }
+      toast(`#${team?.number} ${team?.name} is now an official team.${note}`, 'ok');
+    });
     if (d.rename) { const cur = ctx.teams().find((x) => x.id === d.rename); const name = prompt('New team name', cur?.name || ''); if (name?.trim()) run(() => ctx.store.patch('teams', d.rename, { name: name.trim() })); }
     if (d.delscore && confirm('Delete this official score? The match can then be re-scored.')) run(() => ctx.store.remove('scores', d.delscore));
     if (d.rmp && confirm(`Remove ${d.rmp}? They will no longer be able to sign in.`)) run(async () => { for (const r of roster.filter((x) => x.email === d.rmp)) await ctx.store.remove('roster', r.id); await ctx.store.remove('access', d.rmp); });
@@ -753,7 +803,8 @@ export function adminView(root, ctx) {
   $('#a-reset')?.addEventListener('click', () => { if (confirm('Replace ALL demo data with fresh sample data?')) run(() => ctx.store.resetDemo()); });
   const unsub = ctx.store.subscribe('access', (r) => { people = r; render(); });
   const unsubRoster = ctx.store.subscribe('roster', (r) => { roster = r; render(); });
-  return { update: () => { render(); document.querySelector('dialog[open]')?.hostsRefresh?.(); }, destroy: () => { unsub(); unsubRoster(); } };
+  const unsubRegs = ctx.store.subscribe('registrations', (r) => { regs = r; render(); });
+  return { update: () => { render(); document.querySelector('dialog[open]')?.hostsRefresh?.(); }, destroy: () => { unsub(); unsubRoster(); unsubRegs(); } };
 }
 
 // ───────────────────────────── Public schedule ─────────────────────────────
@@ -807,7 +858,7 @@ export function eventView(root, ctx) {
   if (!(u.role === 'admin' || u.host)) { root.innerHTML = '<section class="card narrow"><h1>Hosts only</h1><p class="muted">Event pages are for event hosts and admins.</p></section>'; return {}; }
   root.innerHTML = '<h1 class="page-title">Event</h1><div id="ev"></div>';
   const host = root.querySelector('#ev');
-  let selId = null, pickKey = '', editing = false, draft = null, seed = 1, cfgIn = null, people = [], refs = [], refsFor = '';
+  let selId = null, pickKey = '', editing = false, draft = null, seed = 1, cfgIn = null, people = [], regs = [], refs = [], refsFor = '';
   try { selId = localStorage.getItem(MANAGE_KEY); } catch { /* ignore */ }
   const run = async (fn) => { try { await fn(); } catch (x) { toast(x.message, 'err'); } };
   const mine = () => hostedEvents(u, ctx.events(), ctx.eventHosts()).sort((a, b) => (b.live - a.live) || (b.createdAt || 0) - (a.createdAt || 0));
@@ -838,7 +889,10 @@ export function eventView(root, ctx) {
         <div id="e-terr" class="error" role="alert" hidden></div>
         <details class="bulk" open><summary>Bulk add (paste “number, name, coach@gmail.com” per line — coach optional)</summary><textarea id="e-bulk" aria-label="Teams to add, one per line" rows="4" placeholder="4201, Robo Rangers, coach@gmail.com&#10;5530, Byte Me"></textarea><button class="btn ghost" id="e-bulkgo" type="button">Add all</button></details>
         ${Array.isArray(ev.teamIds) ? '' : '<p class="muted small">This is an older event that still shows every team. Adding a team (or this button) switches it to a team list you control. <button class="btn ghost small" id="e-legacy" type="button">Switch to a team list</button></p>'}
-        <ul class="admin-list" id="e-teamlist">${teamListHTML(ev, evTeams)}</ul></section>
+        <ul class="admin-list" id="e-teamlist">${teamListHTML(ev, evTeams)}</ul>
+        <h3>Registered by the public</h3>
+        <p class="muted small">Teams that signed up themselves are unofficial. Adding one to this event verifies it and makes it an official team.</p>
+        <ul class="admin-list" id="e-pubreg">${pubRegHTML(ev)}</ul></section>
       ${ev.test ? `<section class="card"><h2>Test tools</h2><p class="muted small">This is a test event: make teams and scores without scoring by hand.</p>
         <div class="row-actions"><button class="btn" id="t-teams" type="button">Add 12 demo teams</button><button class="btn" id="t-scores" type="button">Generate random scores</button><button class="btn ghost danger" id="t-clear" type="button">Clear all scores</button></div></section>` : ''}
       <section class="card"><h2>Referees</h2>
@@ -861,14 +915,24 @@ export function eventView(root, ctx) {
         <p class="muted small">Delete a score so the match can be scored again.</p>
         <ul class="admin-list" id="e-scores">${scoresHTML(ev)}</ul></section>`;
   }
+  const pubRegHTML = (ev) => {
+    const eds = eventEditions(ev), inEv = Array.isArray(ev.teamIds) ? ev.teamIds : [];
+    const list = ctx.teams().filter((t) => t.registered && eds.includes(teamEdition(t)) && !inEv.includes(t.id)).sort((a, b) => a.number - b.number);
+    return list.map((t) => `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span> <span class="badge">Unofficial</span><small class="block">${esc(regs.find((r) => r.id === t.id)?.coachEmail || '')}</small></span><button class="btn small primary" data-pubadd="${esc(t.id)}" aria-label="Add ${esc(t.name)} to this event">Add to event</button></li>`).join('') || '<li class="empty">No unverified public registrations for this event’s editions.</li>';
+  };
   const teamListHTML = (ev, evTeams) => evTeams.slice().sort((a, b) => a.number - b.number).map((t) => `<li><span><b>#${esc(t.number)}</b> ${esc(t.name)} <span class="badge ed-${teamEdition(t)}">${EDITIONS[teamEdition(t)].label}</span></span>${Array.isArray(ev.teamIds) ? `<button class="btn ghost small danger" data-rmteam="${esc(t.id)}" aria-label="Remove team ${esc(t.number)} from this event">Remove</button>` : ''}</li>`).join('') || '<li class="empty">No teams yet — add some above.</li>';
   // An older event with no team list keeps the teams it shows today when its first team is added.
-  const addToEvent = async (ev, ids) => { const base = Array.isArray(ev.teamIds) ? ev.teamIds : eventTeams(ev, ctx.teams()).map((t) => t.id); await ctx.store.patch('events', ev.id, { teamIds: [...new Set([...base, ...ids])] }); };
+  // Adding a publicly registered team to an event is what makes it official: the host/admin vouches for it.
+  const addToEvent = async (ev, ids) => {
+    for (const id of ids) if (ctx.teams().find((t) => t.id === id)?.registered) await ctx.store.patch('teams', id, { registered: false });
+    const base = Array.isArray(ev.teamIds) ? ev.teamIds : eventTeams(ev, ctx.teams()).map((t) => t.id); await ctx.store.patch('events', ev.id, { teamIds: [...new Set([...base, ...ids])] });
+  };
   // Refresh just the lists (not the forms), so typing / Enter-to-submit never loses focus or half-typed input.
   function refreshLists() {
     const ev = cur(); if (!ev) return;
     const teams = ctx.teams().slice().sort((a, b) => a.number - b.number);
     const c = host.querySelector('#e-teamlist'); if (c) c.innerHTML = teamListHTML(ev, eventTeams(ev, teams));
+    const pr = host.querySelector('#e-pubreg'); if (pr) pr.innerHTML = pubRegHTML(ev);
     const r = host.querySelector('#e-reflist'); if (r) r.innerHTML = refsHTML();
     const sl = host.querySelector('#e-scores'); if (sl) sl.innerHTML = scoresHTML(ev);
     const h = host.querySelector('#e-teamcount'); if (h) h.textContent = `(${eventTeams(ev, ctx.teams()).length})`;
@@ -994,6 +1058,7 @@ export function eventView(root, ctx) {
     if (b.closest('#e-sel') && b.dataset.ev) { selId = b.dataset.ev; try { localStorage.setItem(MANAGE_KEY, selId); } catch { /* ignore */ } pickKey = ''; draw(); return; }
     if (b.id === 'e-rename') { const name = prompt('Event name', ev.name); if (name?.trim() && name.trim() !== ev.name) run(async () => { await ctx.store.patch('events', ev.id, { name: name.trim().slice(0, 80) }); toast('Event renamed', 'ok'); draw(); }); }
     if (b.dataset.rmteam) run(async () => { await ctx.store.patch('events', ev.id, { teamIds: (ev.teamIds || []).filter((x) => x !== b.dataset.rmteam) }); draft = null; draw(); });
+    if (b.dataset.pubadd) run(async () => { const t = ctx.teams().find((x) => x.id === b.dataset.pubadd); await addToEvent(ev, [b.dataset.pubadd]); toast(`#${t?.number} ${t?.name} verified and added to ${ev.name}`, 'ok'); });
     if (b.id === 'e-legacy') run(async () => { await ctx.store.patch('events', ev.id, { teamIds: eventTeams(ev, ctx.teams()).map((t) => t.id) }); draw(); });
     if (b.id === 'e-bulkgo') run(async () => {
       const lines = host.querySelector('#e-bulk').value.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -1049,6 +1114,7 @@ export function eventView(root, ctx) {
     if (b.id === 'e-copy') run(async () => { toast((await copyForSheets(exportTable())) ? 'Copied — paste into Google Sheets (Ctrl+V)' : 'Couldn’t copy; use the CSV download', 'ok'); });
   });
   draw();
+  const unsubRegs = ctx.store.subscribe('registrations', (r) => { regs = r; refreshLists(); });
   const unsubPeople = ctx.store.subscribe('access', (r) => { people = r; const ev = cur(); const l = host.querySelector('#e-reflist'); if (l && ev) l.innerHTML = refsHTML(ev); });
-  return { update: () => { if (host.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return refreshLists(); draw(); }, destroy: unsubPeople };
+  return { update: () => { if (host.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) return refreshLists(); draw(); }, destroy: () => { unsubPeople(); unsubRegs(); } };
 }
