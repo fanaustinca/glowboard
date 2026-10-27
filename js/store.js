@@ -505,23 +505,17 @@ class FirebaseStore {
   constructor() { this.cur = null; this.authListeners = new Set(); this.watchers = new Set(); }
   async init() {
     const base = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}`;
-    const [app, auth, fs, analytics] = await Promise.all([
+    const [app, auth, fs] = await Promise.all([
       import(`${base}/firebase-app.js`),
       import(`${base}/firebase-auth.js`),
       import(`${base}/firebase-firestore.js`),
-      firebaseConfig.measurementId ? import(`${base}/firebase-analytics.js`).catch(() => null) : Promise.resolve(null),
     ]);
-    this.sdk = { app, auth, fs, analytics };
+    this.sdk = { app, auth, fs };
     this.fapp = app.initializeApp(firebaseConfig);
     this.auth = auth.getAuth(this.fapp);
     this.fdb = fs.getFirestore(this.fapp);
-    if (analytics && firebaseConfig.measurementId) {
-      try {
-        if (await analytics.isSupported()) {
-          // The router records pageviews, including the initial page.
-          this.analytics = analytics.initializeAnalytics(this.fapp, { config: { send_page_view: false } });
-        }
-      } catch {}
+    if (firebaseConfig.measurementId) {
+      this.initAnalytics(base).catch(() => {});
     }
     auth.onAuthStateChanged(this.auth, async (fu) => {
       if (!fu) {
@@ -542,9 +536,31 @@ class FirebaseStore {
       this.emitAuth();
     });
   }
+  async initAnalytics(base) {
+    try {
+      const analytics = await import(`${base}/firebase-analytics.js`);
+      this.sdk.analytics = analytics;
+      if (await analytics.isSupported()) {
+        // The router records pageviews, including the initial page.
+        this.analytics = analytics.initializeAnalytics(this.fapp, { config: { send_page_view: false } });
+        if (this.cur?.uid && this.sdk.analytics?.setUserId) {
+          try { this.sdk.analytics.setUserId(this.analytics, this.cur.uid); } catch {}
+        }
+        if (this._queuedEvents) {
+          for (const [name, params] of this._queuedEvents) {
+            try { this.sdk.analytics.logEvent(this.analytics, name, params); } catch {}
+          }
+          this._queuedEvents = null;
+        }
+      }
+    } catch {}
+  }
   logEvent(name, params) {
     if (this.analytics && this.sdk.analytics?.logEvent) {
       try { this.sdk.analytics.logEvent(this.analytics, name, params); } catch {}
+    } else if (firebaseConfig.measurementId) {
+      this._queuedEvents ||= [];
+      this._queuedEvents.push([name, params]);
     }
   }
   // Account facts only; the teams come from attach().

@@ -364,6 +364,24 @@ await signIn('uid-des', 'designated@gmail.com'); await page.waitForSelector('dia
 assert.equal((await fbState()).docs.teamSecrets.t77.isDefault, false); ok('"Keep this one" stops the reminder');
 await signOut();
 
+// Analytics resilience check: ensure that a failing Analytics module does not block store initialization or standings
+{
+  const p2 = await cx.newPage();
+  await p2.setRequestInterception(true);
+  p2.on('request', (r) => {
+    const u = r.url();
+    if (u.includes('firebase-analytics.js')) return r.abort();
+    if (u.startsWith('https://www.gstatic.com/firebasejs/')) return r.respond({ status: 200, contentType: 'text/javascript', headers: { 'access-control-allow-origin': '*' }, body: fake });
+    if (u.endsWith('/js/firebase-config.js')) return r.respond({ status: 200, contentType: 'text/javascript', body: `export const firebaseConfig={apiKey:'real-key',authDomain:'x.firebaseapp.com',projectId:'demo-proj',storageBucket:'x',messagingSenderId:'1',appId:'1',measurementId:'G-fail'};export const EMAIL_DOMAIN='myapp.com';export const FIREBASE_SDK_VERSION='10.12.2';export const isConfigured=()=>true;` });
+    r.continue();
+  });
+  await p2.goto(base, { waitUntil: 'networkidle0' });
+  await p2.waitForSelector('.standings .row', { timeout: 5000 });
+  assert.equal((await p2.$$('.standings .row')).length, 2);
+  ok('failing Analytics request does not block app initialization or standings');
+  await p2.close();
+}
+
 await browser.close(); server.close();
 assert.deepEqual(errors, [], 'no browser errors'); ok('no browser errors');
 console.log(`\n${passed} firebase-mock checks passed`);
