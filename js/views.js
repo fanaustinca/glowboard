@@ -155,7 +155,9 @@ export function loginView(root, ctx) {
       ${demo ? `<div class="demo-hint"><b>Demo mode</b> — Firebase isn’t configured yet, so Google sign-in is simulated. Try a role:
         <p class="small">Team sign-in demo: team <code>4201</code>, password <code>424242</code>.</p>
         <div class="demo-roles">${DEMO_ACCOUNTS.map((a) => `<button class="btn" type="button" data-demo="${esc(a.email)}">${esc(ROLE_LABEL[a.role])}<small>${esc(a.email)}</small></button>`).join('')}</div></div>` : ''}
-    </section>`;
+    </section>
+    ${registerCardHTML()}`;
+  bindRegister(root, ctx, () => ctx.go('#/team'));
   const $ = (s) => root.querySelector(s);
   const fail = (x) => { const er = $('#lg-err'); er.hidden = false; er.textContent = x.message; };
   if (ctx.store.notice) { fail({ message: ctx.store.notice }); ctx.store.notice = null; }
@@ -180,7 +182,7 @@ export function loginView(root, ctx) {
 const gate = (root, msg, ctx) => { root.innerHTML = `<section class="card narrow"><h1>Sign in required</h1><p class="muted">${esc(msg)}</p><a class="btn primary" href="#/login">Sign in</a></section>`; ctx.afterLogin = location.hash; return {}; };
 
 // ---- public "Register a team": anyone can add an unofficial team (practice tracking only) with number, name and coach Gmail ----
-const registerCardHTML = (open) => `<section class="card" id="rg-card"><h2>Register a team</h2>
+const registerCardHTML = (open) => `<section class="card narrow" id="rg-card"><h2>Register a team</h2>
   <p class="muted small">No account needed. Register your team to track practice runs and see your stats. A new registration is <b>unofficial</b> until an event host or admin adds your team to an event — then it becomes an official team.</p>
   <form id="rg-form" class="grid-user" novalidate>
     <label class="field"><span>Team number</span><input id="rg-num" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" required></label>
@@ -197,7 +199,7 @@ function bindRegister(root, ctx, onDone) {
     const btn = e.submitter; btn.disabled = true;
     try {
       const r = await ctx.store.registerTeam({ number: root.querySelector('#rg-num').value, name: root.querySelector('#rg-name').value, coachEmail: root.querySelector('#rg-coach').value, edition: root.querySelector('#rg-ed').value });
-      const dlg = modal(`<p><b>#${esc(r.number)} ${esc(r.name)}</b> is registered. Save the team password — teammates join from the Teams tab with the team number and this password:</p>
+      const dlg = modal(`<p><b>#${esc(r.number)} ${esc(r.name)}</b> is registered. Save the team password — teammates join from the Sign in page with the team number and this password:</p>
         <div class="pwbox"><code>${esc(r.password)}</code><button class="btn small" id="rg-copy" type="button">Copy</button></div>
         <p class="muted small">Your team is <b>unofficial</b> until an event host or admin adds it to an event. Practice runs and stats work right away.</p>`, { title: 'Team registered' });
       dlg.querySelector('#rg-copy')?.addEventListener('click', async (ev) => { if (await copyText(r.password)) ev.currentTarget.textContent = 'Copied'; });
@@ -399,12 +401,10 @@ export function statsView(root, ctx, { onEdit = () => {}, readOnly = false } = {
 export function teamView(root, ctx) {
   let u = ctx.user();
   if (!u && /^#\/?(practice|stats|analytics)/.test(location.hash)) return gate(root, 'Sign in to see your teams — or join one with its team number and password.', ctx);
-  if (!u) { // the public side of the Teams tab: join a team you already have, or register a new one
+  if (!u) { // the public side of the Teams tab: sign in, join or register all live on the Sign in page
     ctx.afterLogin = '#/team';
     root.innerHTML = `<h1 class="page-title">Teams</h1>
-      <section class="card"><h2>Already on a team?</h2><p class="muted small">Sign in with your Google account, or join with your team number and the team password.</p><a class="btn primary" href="#/login">Sign in or join a team</a></section>
-      ${registerCardHTML()}`;
-    bindRegister(root, ctx);
+      <section class="card"><h2>Already on a team?</h2><p class="muted small">Sign in with your Google account, or join with your team number and the team password. New team? You can register it on the Sign in page too.</p><a class="btn primary" href="#/login">Sign in, join or register a team</a></section>`;
     return {};
   }
   let people = [], joined = [], secret = null, colors = [], sig = '', panels = {};
